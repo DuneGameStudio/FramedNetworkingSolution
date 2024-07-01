@@ -1,18 +1,19 @@
-﻿using System.Diagnostics;
-using System.Net.Sockets;
+﻿using System;
 using System.Net;
+using System.Diagnostics;
+using System.Net.Sockets;
 
 namespace FramedNetworkingSolution.Network.SocketWrappers
 {
-    public class ServerSocket
+    public class ServerSocket : IDisposable
     {
         /// <summary>
         /// Server Socket.
         /// </summary>
-        private Socket? _socket;
+        private Socket _socket;
 
         /// <summary>
-        /// Server Connection Listining State.
+        /// Server Connection Listening State.
         /// </summary>
         private bool _isListening = false;
 
@@ -40,22 +41,22 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// The Event That Fires When The Server Disconnects.
         /// </summary>
         public event EventHandler<SocketAsyncEventArgs> OnServerDisconnected;
-        
+
         /// <summary>
-        /// Intializes The Server To Accept Connections Asyncly.
+        /// Initializes The Server To Accept Connections Asynchronously.
         /// </summary>
         /// <param name="address">Server Address</param>
         /// <param name="port">Address Port</param>
         public ServerSocket()
         {
-            _onNewConnectionAcceptedEventArgs = new();
-            _onDisconnectedEventArgs = new();
+            _onNewConnectionAcceptedEventArgs = new SocketAsyncEventArgs();
+            _onDisconnectedEventArgs = new SocketAsyncEventArgs();
 
             _onNewConnectionAcceptedEventArgs.Completed += OnNewConnection;
             _onDisconnectedEventArgs.Completed += OnStopped;
 
-            OnNewClientConnection = (object? sender, SocketAsyncEventArgs onDisconnected) => { };
-            OnServerDisconnected = (object? sender, SocketAsyncEventArgs onDisconnected) => { };
+            OnNewClientConnection = (object sender, SocketAsyncEventArgs onDisconnected) => { };
+            OnServerDisconnected = (object sender, SocketAsyncEventArgs onDisconnected) => { };
         }
 
         /// <summary>
@@ -81,13 +82,13 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         }
 
         /// <summary>
-        /// If The Server is Runing Listen For Incoming Connections.
+        ///     If The Server is Running Listen For Incoming Connections.
         /// </summary>
         public void Stop()
         {
             if (_isListening)
             {
-                _socket!.Shutdown(SocketShutdown.Both);
+                _socket.Shutdown(SocketShutdown.Both);
 
                 if (!_socket.DisconnectAsync(_onDisconnectedEventArgs))
                 {
@@ -103,27 +104,27 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         }
 
         /// <summary>
-        /// If The Server is Runing Start Accepting Connection Requests Asyncly Using SocketAsyncEventArgs.
+        /// If The Server is Running Start Accepting Connection Requests Asynchronously Using SocketAsyncEventArgs.
         /// </summary>
         public void AcceptConnections()
         {
             if (_isListening)
             {
-                if (!_socket!.AcceptAsync(_onNewConnectionAcceptedEventArgs))
+                if (!_socket.AcceptAsync(_onNewConnectionAcceptedEventArgs))
                 {
                     OnNewConnection(_socket, _onNewConnectionAcceptedEventArgs);
                 }
             }
             else
             {
-                Debug.WriteLine("StartAcceptingConnections | Server is Not Listining.", "Error");
+                Debug.WriteLine("StartAcceptingConnections | Server is Not Listening.", "Error");
             }
         }
 
         /// <summary>
-        /// 
+        ///     Stops accepting any new connections
         /// </summary>
-        public void StopAccpetingConnections()
+        public void StopAcceptingConnections()
         {
             if (_isListening)
             {
@@ -140,7 +141,7 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="onDisconnected"></param>
-        private void OnNewConnection(object? sender, SocketAsyncEventArgs onDisconnected)
+        private void OnNewConnection(object sender, SocketAsyncEventArgs onDisconnected)
         {
             OnNewClientConnection.Invoke(sender, onDisconnected);
 
@@ -154,13 +155,21 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// On Server Disconnection.
         /// </summary>
         /// <param name="sender">The Server Socket Object.</param>
-        /// <param name="onStopped">The SocketAsyncEventArgs that's Used To Start the Async Desconnection.</param>
-        private void OnStopped(object? sender, SocketAsyncEventArgs onStopped)
+        /// <param name="onStopped">The SocketAsyncEventArgs that's Used To Start the Async Disconnection.</param>
+        private void OnStopped(object sender, SocketAsyncEventArgs onStopped)
         {
-            _socket!.Close();
+            _socket.Close();
             _socket.Dispose();
 
             OnServerDisconnected.Invoke(sender, onStopped);
+        }
+
+        /// <summary>
+        ///     Closes the Server Socket and Disposes it.
+        /// </summary>
+        public void Dispose()
+        {
+            throw new NotImplementedException();
         }
     }
 }

@@ -1,184 +1,203 @@
-using System.Collections.Concurrent;
+using System;
 using System.Diagnostics;
 using System.Net.Sockets;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
 using FramedNetworkingSolution.Network.Servers.Packet;
 using FramedNetworkingSolution.Network.SocketWrappers;
 
-namespace FramedNetworkingSolution.Network.Servers;
-
-public class Network
+namespace FramedNetworkingSolution.Network.Servers
 {
-    /// <summary>
-    /// The Server Network Class.
-    /// </summary>
-    private readonly ServerSocket _server;
-
-    /// <summary>
-    /// Sending State.
-    /// </summary>
-    private bool _sending;
-
-    /// <summary>
-    /// 
-    /// </summary>
-    private Dictionary<Guid, Session> _clientSessions;
-
-    /// <summary>
-    /// 
-    /// </summary>
-    private ConcurrentQueue<(Guid, IPacket)> _sendQueue;
-
-    /// <summary>
-    /// 
-    /// </summary>
-    public event EventHandler<SocketAsyncEventArgs> OnServerDisconnectedHandler;
-
-    /// <summary>
-    /// 
-    /// </summary>
-    public Action<object?, SocketAsyncEventArgs, Guid> OnNewSessionConnectedHandler;
-
-    /// <summary>
-    /// 
-    /// </summary>
-    public Action<object?, SocketAsyncEventArgs, Guid> OnSessionDisconnectedHandler;
-
-    /// <summary>
-    /// 
-    /// </summary>
-    /// <param name="address"></param>
-    /// <param name="port"></param>
-    public Network(string address, int port)
+    public class Network
     {
-        _server = new ServerSocket();
-        _server.Start(address, port);
+        /// <summary>
+        /// The Server Network Class.
+        /// </summary>
+        private readonly ServerSocket _server;
 
-        _clientSessions = new();
-        _sendQueue = new();
+        /// <summary>
+        /// Sending State.
+        /// </summary>
+        private bool _sending;
 
-        _sending = false;
+        /// <summary>
+        /// 
+        /// </summary>
+        public Dictionary<Guid, Session> ClientSessions;
 
-        _server.OnNewClientConnection += OnNewClientConnection;
-        _server.OnServerDisconnected += OnServerDisconnected;
+        /// <summary>
+        /// 
+        /// </summary>
+        private ConcurrentQueue<(Guid, IPacket)> _sendQueue;
 
-        OnServerDisconnectedHandler += (object? clientSessionSocket, SocketAsyncEventArgs ServerDisconnectedEventArgs) => { };
-        OnNewSessionConnectedHandler += (object? clientSessionSocket, SocketAsyncEventArgs NewSessionConnectedEventArgs, Guid ID) => { };
-        OnSessionDisconnectedHandler += (object? clientSessionSocket, SocketAsyncEventArgs SessionDisconnectedEventArgs, Guid ID) => { };
-    }
+        /// <summary>
+        /// 
+        /// </summary>
+        public event EventHandler<SocketAsyncEventArgs> OnServerDisconnectedHandler;
 
-    /// <summary>
-    /// 
-    /// </summary>
-    public void Start()
-    {
-        _server.AcceptConnections();
-    }
+        /// <summary>
+        /// 
+        /// </summary>
+        public event EventHandler<SocketAsyncEventArgs> OnPacketSentHandler;
 
-    /// <summary>
-    /// 
-    /// </summary>
-    public void Stop()
-    {
-        _server.StopAccpetingConnections();
-    }
+        /// <summary>
+        /// 
+        /// </summary>
+        public Action<object, SocketAsyncEventArgs, Guid> OnNewSessionConnectedHandler;
 
-    /// <summary>
-    /// 
-    /// </summary>
-    /// <param name="sender"></param>
-    /// <param name="newClientEventArgs"></param>
-    private void OnNewClientConnection(object? sender, SocketAsyncEventArgs newClientEventArgs)
-    {
-        Socket? clientSocket = newClientEventArgs.AcceptSocket;
-        newClientEventArgs.AcceptSocket = null;
+        /// <summary>
+        /// 
+        /// </summary>
+        public Action<object, SocketAsyncEventArgs, Guid> OnSessionDisconnectedHandler;
 
-        if (clientSocket is not null)
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="address"></param>
+        /// <param name="port"></param>
+        public Network(string address, int port)
         {
-            var session = new Session(clientSocket);
+            _server = new ServerSocket();
+            _server.Start(address, port);
 
-            var ID = Guid.NewGuid();
-            _clientSessions.Add(ID, session);
+            ClientSessions = new Dictionary<Guid, Session>();
+            _sendQueue = new ConcurrentQueue<(Guid, IPacket)>();
 
-            session.OnClientDisconnectedHandler +=
-                (object? clientSessionSocket, SocketAsyncEventArgs clientDisconnectedEventArgs) =>
-                    {
-                        OnClientDisconnected(clientSessionSocket, clientDisconnectedEventArgs, ID);
-                    };
+            _sending = false;
 
-            OnNewSessionConnectedHandler?.Invoke(sender, newClientEventArgs, ID);
+            _server.OnNewClientConnection += OnNewClientConnection;
+            _server.OnServerDisconnected += OnServerDisconnected;
 
-            session.Receive();
+            OnServerDisconnectedHandler += (object clientSessionSocket, SocketAsyncEventArgs ServerDisconnectedEventArgs) => { };
+            OnPacketSentHandler += (object clientSessionSocket, SocketAsyncEventArgs SessionDisconnectedEventArgs) => { };
+
+            OnNewSessionConnectedHandler += (object clientSessionSocket, SocketAsyncEventArgs NewSessionConnectedEventArgs, Guid ID) => { };
+            OnSessionDisconnectedHandler += (object clientSessionSocket, SocketAsyncEventArgs SessionDisconnectedEventArgs, Guid ID) => { };
         }
-        _server.AcceptConnections();
-    }
 
-    /// <summary>
-    /// 
-    /// </summary>
-    /// <param name="clientSessionSocket"></param>
-    /// <param name="clientDisconnectedEventArgs"></param>
-    public void OnClientDisconnected(object? clientSessionSocket, SocketAsyncEventArgs clientDisconnectedEventArgs, Guid ID)
-    {
-        _clientSessions.TryGetValue(ID, out Session? session);
-
-        if (session is not null)
+        /// <summary>
+        /// 
+        /// </summary>
+        public void Start()
         {
-            OnSessionDisconnectedHandler?.Invoke(clientSessionSocket, clientDisconnectedEventArgs, ID);
-
-            _clientSessions.Remove(ID);
-            session.Dispose();
+            _server.AcceptConnections();
         }
-        else
+
+        /// <summary>
+        /// 
+        /// </summary>
+        public void Stop()
         {
-            Debug.WriteLine($"Client Disconnected | Session ID: {ID} not found.", "Error");
+            _server.StopAcceptingConnections();
         }
-    }
 
-    /// <summary>
-    /// 
-    /// </summary>
-    /// <param name="clientSession"></param>
-    /// <param name="packet"></param>
-    public void EnqueueToSend(Guid clientSessionID, IPacket packet)
-        => _sendQueue.Enqueue((clientSessionID, packet));
-
-    /// <summary>
-    /// Checks if There's a Queued IPacket in the Send Queue and Serializes it and Sends it.
-    /// </summary>
-    public void SendQueuedPackets()
-    {
-        if (_sending == false)
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="newClientEventArgs"></param>
+        private void OnNewClientConnection(object sender, SocketAsyncEventArgs newClientEventArgs)
         {
-            _sending = true;
+            Socket clientSocket = newClientEventArgs.AcceptSocket;
+            newClientEventArgs.AcceptSocket = null;
 
-            if (_sendQueue.TryDequeue(out (Guid clientSessionID, IPacket packet) sessionPacket))
+            if (clientSocket != null)
             {
-                _clientSessions.TryGetValue(sessionPacket.clientSessionID, out Session? session);
+                Debug.WriteLine("New Client Connected");
 
-                session?.Send
-                    (
-                        sessionPacket.packet.Serialize(session._sessionSendBuffer, out ushort packetLength),
-                        packetLength
-                    );
+                var id = Guid.NewGuid();
+                var session = new Session(clientSocket, id);
+                ClientSessions.Add(id, session);
+
+                session.OnClientDisconnectedHandler += OnClientDisconnected;
+                session.OnPacketSentHandler += OnPacketSent;
+
+                OnNewSessionConnectedHandler.Invoke(clientSocket, newClientEventArgs, id);
+
+                session.Receive();
+            }
+            _server.AcceptConnections();
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="clientSessionSocket"></param>
+        /// <param name="clientDisconnectedEventArgs"></param>
+        public void OnClientDisconnected(object clientSessionSocket, SocketAsyncEventArgs clientDisconnectedEventArgs, Guid ID)
+        {
+            ClientSessions.TryGetValue(ID, out Session session);
+
+            if (session != null)
+            {
+                OnSessionDisconnectedHandler.Invoke(clientSessionSocket, clientDisconnectedEventArgs, ID);
+
+                ClientSessions.Remove(ID);
+                session.Dispose();
+            }
+            else
+            {
+                Debug.WriteLine($"Client Disconnected | Session ID: {ID} not found.", "error");
             }
         }
-    }
 
-    /// <summary>
-    /// 
-    /// </summary>
-    public void DisconnectServer()
-    {
-        _server.Stop();
-    }
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="clientSession"></param>
+        /// <param name="packet"></param>
+        public void EnqueueToSend(Guid clientSessionID, IPacket packet)
+            => _sendQueue.Enqueue((clientSessionID, packet));
 
-    /// <summary>
-    /// 
-    /// </summary>
-    /// <param name="sender"></param>
-    /// <param name="disconnectEventArgs"></param>
-    public void OnServerDisconnected(object? sender, SocketAsyncEventArgs disconnectEventArgs)
-    {
-        OnServerDisconnectedHandler?.Invoke(sender, disconnectEventArgs);
+        /// <summary>
+        /// Checks if There's a Queued IPacket in the Send Queue and Serializes it and Sends it.
+        /// </summary>
+        public void SendQueuedPackets()
+        {
+            if (_sendQueue.IsEmpty) return;
+
+            if (_sending == false)
+            {
+                _sending = true;
+                Debug.WriteLine("Starting Send Queue");
+                if (_sendQueue.TryDequeue(out (Guid clientSessionID, IPacket packet) sessionPacket))
+                {
+                    if (ClientSessions.TryGetValue(sessionPacket.clientSessionID, out Session session))
+                    {
+                        session.Send
+                            (
+                                sessionPacket.packet.Serialize(session._sessionSendBuffer.AsSpan(2))
+                            );
+                        return;
+                    }
+                }
+                _sending = false;
+            }
+        }
+
+        public void OnPacketSent(object clientSessionSocket, SocketAsyncEventArgs packetSentEventArgs)
+        {
+            _sending = false;
+            Debug.WriteLine("Sent");
+            OnPacketSentHandler.Invoke(clientSessionSocket, packetSentEventArgs);
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        public void DisconnectServer()
+        {
+            _server.Stop();
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="disconnectEventArgs"></param>
+        public void OnServerDisconnected(object sender, SocketAsyncEventArgs disconnectEventArgs)
+        {
+            OnServerDisconnectedHandler.Invoke(sender, disconnectEventArgs);
+        }
     }
 }

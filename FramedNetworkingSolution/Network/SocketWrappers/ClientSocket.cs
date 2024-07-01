@@ -1,11 +1,12 @@
 using System;
+using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Buffers.Binary;
 
 namespace FramedNetworkingSolution.Network.SocketWrappers
 {
-    public class Session : IDisposable
+    public class ClientSocket : IDisposable
     {
         /// <summary>
         ///     The Session's Main Socket.
@@ -13,14 +14,14 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         private readonly Socket _socket;
 
         /// <summary>
-        /// 
-        /// </summary>
-        public readonly Guid Id;
-
-        /// <summary>
         ///     Connection Status.
         /// </summary>
         private bool _connected;
+
+        /// <summary>
+        ///     Reconnecting State.
+        /// </summary>
+        private bool _reconnecting;
 
         /// <summary>
         ///     Event Arguments For Sending Operation.
@@ -51,7 +52,7 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         ///     On Packet Received Event Handler.
         /// </summary>
         // public event EventHandler<SocketAsyncEventArgs> OnPacketReceivedHandler;
-        public Action<object, SocketAsyncEventArgs, Guid> OnPacketReceivedHandler;
+        public Action<object, SocketAsyncEventArgs> OnPacketReceivedHandler;
 
         /// <summary>
         ///     On Packet Sent Event Handler.
@@ -61,7 +62,7 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// <summary>
         ///     On Packet Disconnect Event Handler.
         /// </summary>
-        public Action<object, SocketAsyncEventArgs, Guid> OnClientDisconnectedHandler;
+        public Action<object, SocketAsyncEventArgs> OnClientDisconnectedHandler;
 
         /// <summary>
         ///     Initializes The Session Receive Buffer.
@@ -77,11 +78,11 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         ///     Server Session Constructor That Initializes the Socket From An Already Initialized Socket.
         /// </summary>
         /// <param name="socket">The Connected Socket</param>
-        public Session(Socket socket, Guid id)//, ServerSocket _Server)
+        public ClientSocket(Socket socket) //, Guid id)
         {
             _socket = socket;
 
-            Id = id;
+            // Id = id;
 
             _connectEventArgs = new SocketAsyncEventArgs();
             _sendEventArgs = new SocketAsyncEventArgs();
@@ -89,16 +90,47 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
             _disconnectEventArgs = new SocketAsyncEventArgs();
 
             OnConnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
-            OnPacketReceivedHandler += (object sender, SocketAsyncEventArgs onDisconnected, Guid Id) => { };
+            OnPacketReceivedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnPacketSentHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
-            OnClientDisconnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected, Guid Id) => { };
+            OnClientDisconnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
 
-            // _connectEventArgs.Completed += OnTryConnectResponse;
+            _connectEventArgs.Completed += OnTryConnectResponse;
             _sendEventArgs.Completed += OnPacketSent;
             _receiveEventArgs.Completed += OnPacketReceived;
             _disconnectEventArgs.Completed += OnDisconnected;
 
             _connected = true;
+        }
+
+        /// <summary>
+        ///     
+        /// </summary>
+        /// <param name="address"></param>
+        /// <param name="port"></param>
+        public void TryConnect(string address, int port)
+        {
+            _connectEventArgs.RemoteEndPoint = new IPEndPoint(IPAddress.Parse(address), port);
+
+            if (!_socket.ConnectAsync(_connectEventArgs))
+            {
+                OnTryConnectResponse(_socket, _connectEventArgs);
+            }
+        }
+
+        /// <summary>
+        ///     Attempts An Async Reconnect To The Client.
+        /// </summary>
+        public void TryReconnectClient()
+        {
+            _connected = false;
+            _reconnecting = true;
+
+            _connectEventArgs.RemoteEndPoint = _socket.RemoteEndPoint;
+
+            if (!_socket.ConnectAsync(_connectEventArgs))
+            {
+                OnTryConnectResponse(_socket, _connectEventArgs);
+            }
         }
 
         /// <summary>
@@ -171,6 +203,29 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         }
 
         /// <summary>
+        ///     Client Async Reconnection Attempt Callback.
+        /// </summary>
+        /// <param name="sender">The Session Socket</param>
+        /// <param name="tryConnectEventArgs">Reconnection Event Args</param>
+        public void OnTryConnectResponse(object sender, SocketAsyncEventArgs tryConnectEventArgs)
+        {
+            if (tryConnectEventArgs.SocketError == SocketError.Success)
+            {
+                _connected = true;
+                _reconnecting = false;
+
+                OnConnectedHandler.Invoke(sender, tryConnectEventArgs);
+            }
+            else
+            {
+                _connected = false;
+                _reconnecting = false;
+
+                Debug.WriteLine("Session Try Reconnect Failed", "log");
+            }
+        }
+
+        /// <summary>
         ///     On Packet Received Callback.
         /// </summary>
         /// <param name="sender">The Session Socket</param>
@@ -184,13 +239,14 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
                     return;
 
                 case 2:
+                    //var data = BitConverter.ToUInt16(onReceived.MemoryBuffer.Span);
                     var data = BitConverter.ToUInt16(onReceived.Buffer, 0);
                     Receive(data);
                     return;
             }
             Debug.WriteLine("Received Packet Length: " + onReceived.BytesTransferred, "log");
 
-            OnPacketReceivedHandler.Invoke(sender, onReceived, Id);
+            OnPacketReceivedHandler.Invoke(sender, onReceived); //, Id);
         }
 
         /// <summary>
@@ -208,7 +264,7 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// </summary>
         public void OnDisconnected(object sender, SocketAsyncEventArgs onDisconnected)
         {
-            OnClientDisconnectedHandler.Invoke(sender, onDisconnected, Id);
+            OnClientDisconnectedHandler.Invoke(sender, onDisconnected); //, Id);
         }
 
         /// <summary>
