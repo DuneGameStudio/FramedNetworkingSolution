@@ -30,6 +30,12 @@ obj/
 .history
 .ionide
 
+# Unity3D generated meta files
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+*.meta
+
 ### Windows ###
 # Windows thumbnail cache files
 Thumbs.db
