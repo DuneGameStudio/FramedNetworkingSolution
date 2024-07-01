@@ -22,10 +22,10 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// </summary>
         private bool _connected;
 
-        /// <summary>
-        ///     Event Arguments For Sending Operation.
-        /// </summary>
-        private readonly SocketAsyncEventArgs _connectEventArgs;
+        // /// <summary>
+        // ///     Event Arguments For Sending Operation.
+        // /// </summary>
+        // private readonly SocketAsyncEventArgs _connectEventArgs;
 
         /// <summary>
         /// Event Arguments For Sending Operation.
@@ -45,7 +45,7 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// <summary>
         ///     On Packet Received Event Handler.
         /// </summary>
-        public event EventHandler<SocketAsyncEventArgs> OnConnectedHandler;
+        // public event EventHandler<SocketAsyncEventArgs> OnConnectedHandler;
 
         /// <summary>
         ///     On Packet Received Event Handler.
@@ -83,12 +83,12 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
 
             Id = id;
 
-            _connectEventArgs = new SocketAsyncEventArgs();
+            // _connectEventArgs = new SocketAsyncEventArgs();
             _sendEventArgs = new SocketAsyncEventArgs();
             _receiveEventArgs = new SocketAsyncEventArgs();
             _disconnectEventArgs = new SocketAsyncEventArgs();
 
-            OnConnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
+            // OnConnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnPacketReceivedHandler += (object sender, SocketAsyncEventArgs onDisconnected, Guid Id) => { };
             OnPacketSentHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnClientDisconnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected, Guid Id) => { };

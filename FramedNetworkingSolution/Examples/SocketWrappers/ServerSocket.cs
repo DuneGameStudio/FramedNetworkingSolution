@@ -49,6 +49,8 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// <param name="port">Address Port</param>
         public ServerSocket()
         {
+            _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+
             _onNewConnectionAcceptedEventArgs = new SocketAsyncEventArgs();
             _onDisconnectedEventArgs = new SocketAsyncEventArgs();
 
@@ -68,7 +70,6 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         {
             if (!_isListening)
             {
-                _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
                 _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
                 _socket.Bind(new IPEndPoint(IPAddress.Parse(address), port));
                 _socket.Listen(-1);

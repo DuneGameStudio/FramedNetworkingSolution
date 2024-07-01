@@ -18,10 +18,10 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// </summary>
         private bool _connected;
 
-        /// <summary>
-        ///     Reconnecting State.
-        /// </summary>
-        private bool _reconnecting;
+        // /// <summary>
+        // ///     Reconnecting State.
+        // /// </summary>
+        // private bool _reconnecting;
 
         /// <summary>
         ///     Event Arguments For Sending Operation.
@@ -117,21 +117,21 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
             }
         }
 
-        /// <summary>
-        ///     Attempts An Async Reconnect To The Client.
-        /// </summary>
-        public void TryReconnectClient()
-        {
-            _connected = false;
-            _reconnecting = true;
+        // /// <summary>
+        // ///     Attempts An Async Reconnect To The Client.
+        // /// </summary>
+        // public void TryReconnectClient()
+        // {
+        //     _connected = false;
+        //     _reconnecting = true;
 
-            _connectEventArgs.RemoteEndPoint = _socket.RemoteEndPoint;
+        //     _connectEventArgs.RemoteEndPoint = _socket.RemoteEndPoint;
 
-            if (!_socket.ConnectAsync(_connectEventArgs))
-            {
-                OnTryConnectResponse(_socket, _connectEventArgs);
-            }
-        }
+        //     if (!_socket.ConnectAsync(_connectEventArgs))
+        //     {
+        //         OnTryConnectResponse(_socket, _connectEventArgs);
+        //     }
+        // }
 
         /// <summary>
         ///     Start an Async Receive Operation to receive data from the client using the given buffer size.
@@ -212,14 +212,14 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
             if (tryConnectEventArgs.SocketError == SocketError.Success)
             {
                 _connected = true;
-                _reconnecting = false;
+                // _reconnecting = false;
 
                 OnConnectedHandler.Invoke(sender, tryConnectEventArgs);
             }
             else
             {
                 _connected = false;
-                _reconnecting = false;
+                // _reconnecting = false;
 
                 Debug.WriteLine("Session Try Reconnect Failed", "log");
             }
