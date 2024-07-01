@@ -1,5 +1,5 @@
 {
-  "name": "com.NTStudio.FramedNetworkingSolution",
+  "name": "com.ntstudio.framed_networking_solution",
   "version": "0.0.1",
   "displayName": "FramedNetworkingSolution",
   "description": "This is an implementation of the C# sockets socketAsyncEventArgs and the packet framing design pattern offering an ultra low latancy C# networking solution.",
