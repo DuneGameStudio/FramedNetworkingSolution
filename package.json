@@ -9,7 +9,7 @@
   "changelogUrl": "https://github.com/AbdulrahmanHashem/FramedNetworkingSolution/commits/main/",
   "licensesUrl": "",
   "dependencies": {},
- "keywords": [
+  "keywords": [
     "FramedNetworking",
     "PacketFraming"
   ],
