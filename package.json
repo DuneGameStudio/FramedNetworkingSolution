@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "displayName": "FramedNetworkingSolution",
   "description": "This is an implementation of the C# sockets socketAsyncEventArgs and the packet framing design pattern offering an ultra low latancy C# networking solution.",
-  "unity": "6",
+  "unity": "6000.0",
   "unityRelease": "7f1",
   "documentationUrl": "https://github.com/AbdulrahmanHashem/FramedNetworkingSolution",
   "changelogUrl": "https://github.com/AbdulrahmanHashem/FramedNetworkingSolution/commits/main/",
