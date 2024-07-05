@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Buffers.Binary;
 
-namespace FramedNetworkingSolution.Network.SocketWrappers
+namespace SocketWrappers
 {
     public class Session : IDisposable
     {
@@ -21,6 +21,11 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         ///     Connection Status.
         /// </summary>
         private bool _connected;
+
+        /// <summary>
+        /// Disposed State
+        /// </summary>
+        private bool _disposedValue;
 
         // /// <summary>
         // ///     Event Arguments For Sending Operation.
@@ -41,11 +46,6 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         ///     Event Arguments For Disconnecting Operation.
         /// </summary>
         private readonly SocketAsyncEventArgs _disconnectEventArgs;
-
-        /// <summary>
-        ///     On Packet Received Event Handler.
-        /// </summary>
-        // public event EventHandler<SocketAsyncEventArgs> OnConnectedHandler;
 
         /// <summary>
         ///     On Packet Received Event Handler.
@@ -212,13 +212,32 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         }
 
         /// <summary>
-        ///     Closes the Session Socket and Disposes it.
+        /// 
+        /// </summary>
+        /// <param name="disposing"></param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposedValue)
+            {
+                if (disposing)
+                {
+                    // Dispose managed resources
+                    _socket.Dispose();
+                    _sendEventArgs.Dispose();
+                    _receiveEventArgs.Dispose();
+                    _disconnectEventArgs.Dispose();
+                }
+                _disposedValue = true;
+            }
+        }
+
+        /// <summary>
+        ///     Closes the Server Socket and Disposes it.
         /// </summary>
         public void Dispose()
         {
-            _socket.Shutdown(SocketShutdown.Both);
-            _socket.Close();
-            _socket.Dispose();
+            Dispose(true);
+            GC.SuppressFinalize(this);
         }
     }
 }

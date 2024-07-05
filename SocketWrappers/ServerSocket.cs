@@ -2,10 +2,11 @@
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
+using FramedNetworkingSolution.SocketWrappers;
 
-namespace FramedNetworkingSolution.Network.SocketWrappers
+namespace SocketWrappers
 {
-    public class ServerSocket : IDisposable
+    public class ServerSocket : IServerSocket
     {
         /// <summary>
         /// Server Socket.
@@ -16,6 +17,11 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// Server Connection Listening State.
         /// </summary>
         private bool _isListening = false;
+
+        /// <summary>
+        /// Disposed State
+        /// </summary>
+        private bool _disposedValue;
 
         /// <summary>
         /// Server New Client Accepting State.
@@ -31,6 +37,7 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// Wrapper Class For The Event That Fires When The Server Disconnects.
         /// </summary>
         private SocketAsyncEventArgs _onDisconnectedEventArgs;
+
 
         /// <summary>
         /// The Event That Fires When a New Client Connects.
@@ -160,9 +167,27 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         private void OnStopped(object sender, SocketAsyncEventArgs onStopped)
         {
             _socket.Close();
-            _socket.Dispose();
 
             OnServerDisconnected.Invoke(sender, onStopped);
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="disposing"></param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposedValue)
+            {
+                if (disposing)
+                {
+                    // Dispose managed resources
+                    _socket.Dispose();
+                    _onNewConnectionAcceptedEventArgs.Dispose();
+                    _onDisconnectedEventArgs.Dispose();
+                }
+                _disposedValue = true;
+            }
         }
 
         /// <summary>
@@ -170,7 +195,8 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// </summary>
         public void Dispose()
         {
-            throw new NotImplementedException();
+            Dispose(true);
+            GC.SuppressFinalize(this);
         }
     }
 }

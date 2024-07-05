@@ -1,14 +1,13 @@
 using System;
+using SocketWrappers;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
-using FramedNetworkingSolution.Network.Servers.Packet;
-using FramedNetworkingSolution.Network.SocketWrappers;
 
-namespace FramedNetworkingSolution.Network.Servers
+namespace Servers
 {
-    public class Network
+    public class Server : IServer
     {
         /// <summary>
         /// The Server Network Class.
@@ -19,6 +18,11 @@ namespace FramedNetworkingSolution.Network.Servers
         /// Sending State.
         /// </summary>
         private bool _sending;
+
+        /// <summary>
+        /// Disposed State
+        /// </summary>
+        private bool _disposedValue;
 
         /// <summary>
         /// 
@@ -55,10 +59,9 @@ namespace FramedNetworkingSolution.Network.Servers
         /// </summary>
         /// <param name="address"></param>
         /// <param name="port"></param>
-        public Network(string address, int port)
+        public Server()
         {
             _server = new ServerSocket();
-            _server.Start(address, port);
 
             ClientSessions = new Dictionary<Guid, Session>();
             _sendQueue = new ConcurrentQueue<(Guid, IPacket)>();
@@ -78,8 +81,10 @@ namespace FramedNetworkingSolution.Network.Servers
         /// <summary>
         /// 
         /// </summary>
-        public void Start()
+        public void Start(string address, int port)
         {
+            _server.Start(address, port);
+
             _server.AcceptConnections();
         }
 
@@ -185,9 +190,10 @@ namespace FramedNetworkingSolution.Network.Servers
         /// <summary>
         /// 
         /// </summary>
-        public void DisconnectServer()
+        public void StopServer()
         {
             _server.Stop();
+            Dispose();
         }
 
         /// <summary>
@@ -198,6 +204,31 @@ namespace FramedNetworkingSolution.Network.Servers
         public void OnServerDisconnected(object sender, SocketAsyncEventArgs disconnectEventArgs)
         {
             OnServerDisconnectedHandler.Invoke(sender, disconnectEventArgs);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposedValue)
+            {
+                if (disposing)
+                {
+                    // Dispose managed resources
+                    _server.Dispose();
+                    foreach (var session in ClientSessions.Values)
+                    {
+                        session.Dispose();
+                    }
+                    ClientSessions.Clear();
+                }
+
+                _disposedValue = true;
+            }
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
         }
     }
 }

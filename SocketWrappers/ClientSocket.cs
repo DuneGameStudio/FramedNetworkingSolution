@@ -4,9 +4,9 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Buffers.Binary;
 
-namespace FramedNetworkingSolution.Network.SocketWrappers
+namespace SocketWrappers
 {
-    public class ClientSocket : IDisposable
+    public class ClientSocket
     {
         /// <summary>
         ///     The Session's Main Socket.
@@ -18,10 +18,10 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// </summary>
         private bool _connected;
 
-        // /// <summary>
-        // ///     Reconnecting State.
-        // /// </summary>
-        // private bool _reconnecting;
+        /// <summary>
+        /// Disposed State
+        /// </summary>
+        private bool _disposedValue;
 
         /// <summary>
         ///     Event Arguments For Sending Operation.
@@ -194,7 +194,7 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         {
             _connected = false;
 
-            _socket.Shutdown(SocketShutdown.Receive);
+            _socket.Shutdown(SocketShutdown.Both);
 
             if (!_socket.DisconnectAsync(_disconnectEventArgs))
             {
@@ -212,14 +212,12 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
             if (tryConnectEventArgs.SocketError == SocketError.Success)
             {
                 _connected = true;
-                // _reconnecting = false;
 
                 OnConnectedHandler.Invoke(sender, tryConnectEventArgs);
             }
             else
             {
                 _connected = false;
-                // _reconnecting = false;
 
                 Debug.WriteLine("Session Try Reconnect Failed", "log");
             }
@@ -264,17 +262,39 @@ namespace FramedNetworkingSolution.Network.SocketWrappers
         /// </summary>
         public void OnDisconnected(object sender, SocketAsyncEventArgs onDisconnected)
         {
+            _socket.Close();
+
             OnClientDisconnectedHandler.Invoke(sender, onDisconnected); //, Id);
         }
 
         /// <summary>
-        ///     Closes the Session Socket and Disposes it.
+        /// 
+        /// </summary>
+        /// <param name="disposing"></param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposedValue)
+            {
+                if (disposing)
+                {
+                    // Dispose managed resources
+                    _socket.Dispose();
+                    _connectEventArgs.Dispose();
+                    _sendEventArgs.Dispose();
+                    _receiveEventArgs.Dispose();
+                    _disconnectEventArgs.Dispose();
+                }
+                _disposedValue = true;
+            }
+        }
+
+        /// <summary>
+        ///     Closes the Server Socket and Disposes it.
         /// </summary>
         public void Dispose()
         {
-            _socket.Shutdown(SocketShutdown.Both);
-            _socket.Close();
-            _socket.Dispose();
+            Dispose(true);
+            GC.SuppressFinalize(this);
         }
     }
 }

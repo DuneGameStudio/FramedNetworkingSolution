@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace FramedNetworkingSolution.Network.Servers.Packet
+namespace Servers
 {
     public interface IPacket
     {
