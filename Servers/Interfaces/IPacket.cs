@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Servers
+namespace Servers.Interfaces
 {
     public interface IPacket
     {

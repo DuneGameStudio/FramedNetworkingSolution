@@ -2,10 +2,11 @@ using System;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Buffers.Binary;
+using FramedNetworkingSolution.SocketWrappers.Interfaces;
 
 namespace SocketWrappers
 {
-    public class Session : IDisposable
+    public class Session : ISession
     {
         /// <summary>
         ///     The Session's Main Socket.
@@ -48,15 +49,14 @@ namespace SocketWrappers
         private readonly SocketAsyncEventArgs _disconnectEventArgs;
 
         /// <summary>
-        ///     On Packet Received Event Handler.
-        /// </summary>
-        // public event EventHandler<SocketAsyncEventArgs> OnPacketReceivedHandler;
-        public Action<object, SocketAsyncEventArgs, Guid> OnPacketReceivedHandler;
-
-        /// <summary>
         ///     On Packet Sent Event Handler.
         /// </summary>
         public event EventHandler<SocketAsyncEventArgs> OnPacketSentHandler;
+
+        /// <summary>
+        ///     On Packet Received Event Handler.
+        /// </summary>
+        public Action<object, SocketAsyncEventArgs, Guid> OnPacketReceivedHandler;
 
         /// <summary>
         ///     On Packet Disconnect Event Handler.

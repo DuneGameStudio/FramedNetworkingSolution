@@ -3,10 +3,11 @@ using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Buffers.Binary;
+using FramedNetworkingSolution.SocketWrappers.Interfaces;
 
 namespace SocketWrappers
 {
-    public class ClientSocket
+    public class ClientSocket : IClientSocket
     {
         /// <summary>
         ///     The Session's Main Socket.
@@ -49,15 +50,15 @@ namespace SocketWrappers
         public event EventHandler<SocketAsyncEventArgs> OnConnectedHandler;
 
         /// <summary>
+        ///     On Packet Sent Event Handler.
+        /// </summary>
+        public event EventHandler<SocketAsyncEventArgs> OnPacketSentHandler;
+
+        /// <summary>
         ///     On Packet Received Event Handler.
         /// </summary>
         // public event EventHandler<SocketAsyncEventArgs> OnPacketReceivedHandler;
         public Action<object, SocketAsyncEventArgs> OnPacketReceivedHandler;
-
-        /// <summary>
-        ///     On Packet Sent Event Handler.
-        /// </summary>
-        public event EventHandler<SocketAsyncEventArgs> OnPacketSentHandler;
 
         /// <summary>
         ///     On Packet Disconnect Event Handler.
