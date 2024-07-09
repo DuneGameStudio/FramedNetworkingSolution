@@ -2,7 +2,7 @@
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
-using FramedNetworkingSolution.SocketWrappers.Interfaces;
+using FramedNetworkingSolution.SocketFramingExtensions.Interfaces;
 
 namespace SocketWrappers
 {
