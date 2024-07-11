@@ -1,7 +1,7 @@
 using System;
 using System.Net.Sockets;
 
-namespace FramedNetworkingSolution.SocketFramingExtensions.Interfaces
+namespace Sockets.SocketFramingExtensions.Interfaces
 {
     public interface IServerSocket : IDisposable
     {

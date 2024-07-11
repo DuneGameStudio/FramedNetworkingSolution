@@ -3,11 +3,11 @@ using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Buffers.Binary;
-using FramedNetworkingSolution.SocketFramingExtensions.Interfaces;
+using Sockets.SocketFramingExtensions.Interfaces;
 
 namespace SocketWrappers
 {
-    public class ClientSocket : IClientSocket
+    public class ClientSocket
     {
         /// <summary>
         ///     The Session's Main Socket.

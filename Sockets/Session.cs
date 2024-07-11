@@ -2,11 +2,11 @@ using System;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Buffers.Binary;
-using FramedNetworkingSolution.SocketFramingExtensions.Interfaces;
+using Sockets.SocketFramingExtensions.Interfaces;
 
 namespace SocketWrappers
 {
-    public class Session : ISession
+    public class Session
     {
         /// <summary>
         ///     The Session's Main Socket.
