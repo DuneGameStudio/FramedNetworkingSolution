@@ -5,7 +5,7 @@ using Sockets.Interfaces.Session;
 
 namespace Sockets
 {
-    public class Transport : ITransport
+    public class Transport : ITransport, ITransportConnector
     {
         /// <summary>
         ///     The Session's Main Socket.
@@ -16,11 +16,6 @@ namespace Sockets
         ///     Connection Status.
         /// </summary>
         private bool _connected;
-
-        /// <summary>
-        ///     Disposed State
-        /// </summary>
-        private bool _disposedValue;
 
         /// <summary>
         ///     Initializes The Session Receive Buffer.
@@ -43,6 +38,17 @@ namespace Sockets
         private readonly SocketAsyncEventArgs _receiveEventArgs;
 
         /// <summary>
+        ///     Event Arguments For Sending Operation.
+        /// </summary>
+        private readonly SocketAsyncEventArgs _connectEventArgs;
+
+        /// <summary>
+        ///     Event Arguments For Receiving Operation.
+        /// </summary>
+        private readonly SocketAsyncEventArgs _disconnectEventArgs;
+
+        #region ITransport
+        /// <summary>
         ///     On Packet Sent Event Handler.
         /// </summary>
         public Action<object, SocketAsyncEventArgs> OnPacketSent;
@@ -58,9 +64,13 @@ namespace Sockets
 
             OnPacketSent += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnPacketReceived += (object sender, SocketAsyncEventArgs onDisconnected) => { };
+            OnTryConnectResult += (object sender, SocketAsyncEventArgs onDisconnected) => { };
+            OnDisconnected += (object sender, SocketAsyncEventArgs onDisconnected) => { };
 
             _sendEventArgs = new SocketAsyncEventArgs();
             _receiveEventArgs = new SocketAsyncEventArgs();
+            _connectEventArgs = new SocketAsyncEventArgs();
+            _disconnectEventArgs = new SocketAsyncEventArgs();
         }
 
         /// <summary>
@@ -116,6 +126,29 @@ namespace Sockets
                 Debug.WriteLine("Receive | Client Is Not Connected", "error");
             }
         }
+        #endregion
+
+        #region ITransportConnector
+        public Action<object, SocketAsyncEventArgs> OnTryConnectResult;
+
+        public Action<object, SocketAsyncEventArgs> OnDisconnected;
+
+        public void TryConnect(string address, int port)
+        {
+
+        }
+
+        public void Disconnect()
+        {
+
+        }
+        #endregion
+
+        #region IDisposable
+        /// <summary>
+        ///     Disposed State
+        /// </summary>
+        private bool _disposedValue;
 
         /// <summary>
         /// 
@@ -144,5 +177,6 @@ namespace Sockets
             Dispose(true);
             GC.SuppressFinalize(this);
         }
+        #endregion
     }
 }
