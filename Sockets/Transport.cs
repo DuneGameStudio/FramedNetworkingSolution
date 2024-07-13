@@ -1,11 +1,12 @@
 using System;
 using System.Diagnostics;
+using System.Net;
 using System.Net.Sockets;
 using Sockets.Interfaces.Session;
 
 namespace Sockets
 {
-    public class Transport : ITransport, ITransportConnector
+    public class Transport : ITransport
     {
         /// <summary>
         ///     The Session's Main Socket.
@@ -13,19 +14,14 @@ namespace Sockets
         private readonly Socket _socket;
 
         /// <summary>
-        ///     Connection Status.
-        /// </summary>
-        private bool _connected;
-
-        /// <summary>
         ///     Initializes The Session Receive Buffer.
         /// </summary>
-        public readonly byte[] _sessionReceiveBuffer = new byte[256];
+        public readonly byte[] _receiveBuffer = new byte[256];
 
         /// <summary>
         ///     Initializes The Session Send Buffers.
         /// </summary>
-        public readonly byte[] _sessionSendBuffer = new byte[256];
+        public readonly byte[] _sendBuffer = new byte[256];
 
         /// <summary>
         ///     Event Arguments For Sending Operation.
@@ -47,17 +43,6 @@ namespace Sockets
         /// </summary>
         private readonly SocketAsyncEventArgs _disconnectEventArgs;
 
-        #region ITransport
-        /// <summary>
-        ///     On Packet Sent Event Handler.
-        /// </summary>
-        public Action<object, SocketAsyncEventArgs> OnPacketSent;
-
-        /// <summary>
-        ///     On Packet Received Event Handler.
-        /// </summary>
-        public Action<object, SocketAsyncEventArgs> OnPacketReceived;
-
         public Transport(Socket socket)
         {
             _socket = socket;
@@ -73,16 +58,27 @@ namespace Sockets
             _disconnectEventArgs = new SocketAsyncEventArgs();
         }
 
+        #region ITransporte
+        /// <summary>
+        ///     On Packet Sent Event Handler.
+        /// </summary>
+        public Action<object, SocketAsyncEventArgs> OnPacketSent;
+
+        /// <summary>
+        ///     On Packet Received Event Handler.
+        /// </summary>
+        public Action<object, SocketAsyncEventArgs> OnPacketReceived;
+
         /// <summary>
         ///     Start an Async Receive Operation to receive data from the client using the given buffer size.
         /// </summary>
         /// <param name="bufferSize">The Size of the Buffer to be Allocated for the Receiving of Data From Client.</param>
-        public void Receive(int bufferSize = 2)
+        public void ReceiveAsync(int bufferSize = 2)
         {
-            if (_connected)
+            if (_socket.Connected)
             {
                 //_receiveEventArgs.SetBuffer(_sessionReceiveBuffer.AsMemory(0, bufferSize));
-                _receiveEventArgs.SetBuffer(_sessionSendBuffer, 0, bufferSize);
+                _receiveEventArgs.SetBuffer(_sendBuffer, 0, bufferSize);
 
                 if (!_socket.ReceiveAsync(_receiveEventArgs))
                 {
@@ -101,20 +97,20 @@ namespace Sockets
         /// </summary>
         /// <param name="packet">A Memory Of a Byte Array Containing the Data Needed To Be Sent.</param>
         /// <param name="packetLength">The Length of the Packet That Needs to be Sent.</param>
-        public void Send(ushort packetLength) //Span<byte> packet,
+        public void SendAsync(ushort packetLength)
         {
-            if (_connected)
+            if (_socket.Connected)
             {
                 // ushort packetDataLength = (ushort)(packetLength - 2);
                 ushort packetDataLength = packetLength;
 
-                BitConverter.TryWriteBytes(_sessionSendBuffer.AsSpan(0), packetDataLength);
+                BitConverter.TryWriteBytes(_sendBuffer.AsSpan(0), packetDataLength);
                 // BinaryPrimitives.TryWriteUInt16LittleEndian(_sessionSendBuffer.AsSpan(0), packetDataLength);
 
                 packetLength += 2;
 
                 // _sendEventArgs.SetBuffer(_sessionSendBuffer.AsMemory(0, packetLength));
-                _sendEventArgs.SetBuffer(_sessionSendBuffer, 0, packetLength);
+                _sendEventArgs.SetBuffer(_sendBuffer, 0, packetLength);
 
                 if (!_socket.SendAsync(_sendEventArgs))
                 {
@@ -128,19 +124,56 @@ namespace Sockets
         }
         #endregion
 
-        #region ITransportConnector
+        #region ITransportConnector 
+        /// <summary>
+        ///     The IP of the Other Connected End Point 
+        /// </summary>
+        private IPEndPoint? iPEndPoint;
+
+        /// <summary>
+        ///     The TryConnect Result Callback
+        /// </summary>
         public Action<object, SocketAsyncEventArgs> OnTryConnectResult;
 
+        /// <summary>
+        ///     The OnDisconnected Callback
+        /// </summary>
         public Action<object, SocketAsyncEventArgs> OnDisconnected;
 
-        public void TryConnect(string address, int port)
+        /// <summary>
+        ///     Intilizes The Connection Endpoint given the Parameters <paramref name="address"/> and <paramref name="port"/>
+        /// </summary>
+        /// <param name="address"></param>
+        /// <param name="port"></param>
+        public void Initialize(string address, int port)
         {
-
+            iPEndPoint = new IPEndPoint(IPAddress.Parse(address), port);
         }
 
-        public void Disconnect()
+        /// <summary>
+        ///     Starts and Async Connection Attempt
+        /// </summary>
+        public void AttemptConnectAsync()
         {
+            _connectEventArgs.RemoteEndPoint = iPEndPoint;
 
+            if (!_socket.ConnectAsync(_connectEventArgs))
+            {
+                OnTryConnectResult(_socket, _connectEventArgs);
+            }
+        }
+
+        /// <summary>
+        ///     Starts an Async Disconnection Operation.
+        /// </summary>
+        public void DisconnectAsync()
+        {
+            _socket.Shutdown(SocketShutdown.Both); // Stops sending and receiving.  
+
+            if (!_socket.DisconnectAsync(_disconnectEventArgs))
+            {
+                OnDisconnected(_socket, _disconnectEventArgs);
+            }
         }
         #endregion
 

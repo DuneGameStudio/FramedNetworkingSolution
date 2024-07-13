@@ -3,11 +3,11 @@ using System.Net.Sockets;
 
 namespace Sockets.Interfaces.Session
 {
-    public interface ITransport : IDisposable
+    public interface ITransport : ITransportConnector, IDisposable
     {
         delegate void OnPacketSent<in SocketAsyncEventArgs>(SocketAsyncEventArgs socketAsyncEventArgs);
         delegate void OnPacketReceived<in SocketAsyncEventArgs, in Guid>(SocketAsyncEventArgs socketAsyncEventArgs, Guid guid);
-        void Receive(int bufferSize = 2);
-        void Send(ushort packetLength);
+        void ReceiveAsync(int bufferSize = 2);
+        void SendAsync(ushort packetLength);
     }
 }

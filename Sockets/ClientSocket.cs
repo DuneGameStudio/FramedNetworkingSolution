@@ -3,7 +3,6 @@ using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Buffers.Binary;
-using Sockets.SocketFramingExtensions.Interfaces;
 
 namespace SocketWrappers
 {

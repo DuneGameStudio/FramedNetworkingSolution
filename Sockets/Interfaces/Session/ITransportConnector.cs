@@ -7,7 +7,8 @@ namespace Sockets.Interfaces.Session
     {
         delegate void OnTryConnectResult<in SocketAsyncEventArgs>(SocketAsyncEventArgs socketAsyncEventArgs);
         delegate void OnDisconnected<in SocketAsyncEventArgs>(SocketAsyncEventArgs socketAsyncEventArgs);
-        void TryConnect(string address, int port);
-        void Disconnect();
+        void Initialize(string address, int port);
+        void AttemptConnectAsync();
+        void DisconnectAsync();
     }
 }
