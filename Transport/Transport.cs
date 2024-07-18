@@ -1,6 +1,6 @@
 using System;
-using System.Diagnostics;
 using System.Net;
+using System.Diagnostics;
 using System.Net.Sockets;
 using Sockets.Interfaces.Session;
 
@@ -49,25 +49,31 @@ namespace Sockets
 
             OnPacketSent += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnPacketReceived += (object sender, SocketAsyncEventArgs onDisconnected) => { };
-            OnTryConnectResult += (object sender, SocketAsyncEventArgs onDisconnected) => { };
+            OnAttemptConnectResult += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnDisconnected += (object sender, SocketAsyncEventArgs onDisconnected) => { };
 
             _sendEventArgs = new SocketAsyncEventArgs();
             _receiveEventArgs = new SocketAsyncEventArgs();
             _connectEventArgs = new SocketAsyncEventArgs();
             _disconnectEventArgs = new SocketAsyncEventArgs();
+
+            _sendEventArgs.Completed += OnPacketSent;
+            _receiveEventArgs.Completed += PacketReceived;
+            _connectEventArgs.Completed += OnAttemptConnectResult;
+            _disconnectEventArgs.Completed += OnDisconnected;
         }
 
         #region ITransporte
         /// <summary>
         ///     On Packet Sent Event Handler.
         /// </summary>
-        public Action<object, SocketAsyncEventArgs> OnPacketSent;
+        // public Action<object, SocketAsyncEventArgs> OnPacketSent;
+        public event EventHandler<SocketAsyncEventArgs> OnPacketSent;
 
         /// <summary>
         ///     On Packet Received Event Handler.
         /// </summary>
-        public Action<object, SocketAsyncEventArgs> OnPacketReceived;
+        public event EventHandler<SocketAsyncEventArgs> OnPacketReceived;
 
         /// <summary>
         ///     Start an Async Receive Operation to receive data from the client using the given buffer size.
@@ -77,18 +83,33 @@ namespace Sockets
         {
             if (_socket.Connected)
             {
-                //_receiveEventArgs.SetBuffer(_sessionReceiveBuffer.AsMemory(0, bufferSize));
-                _receiveEventArgs.SetBuffer(_sendBuffer, 0, bufferSize);
+                _receiveEventArgs.SetBuffer(_receiveBuffer, 0, bufferSize);
 
                 if (!_socket.ReceiveAsync(_receiveEventArgs))
                 {
-                    OnPacketReceived(_socket, _receiveEventArgs);
+                    PacketReceived(_socket, _receiveEventArgs);
                 }
             }
             else
             {
                 Debug.WriteLine("Receive | Client Is Not Connected", "error");
             }
+        }
+
+        private void PacketReceived(object sender, SocketAsyncEventArgs onReceived)
+        {
+            switch (onReceived.BytesTransferred)
+            {
+                case 0:
+                    Debug.WriteLine("Received And Empty Packet", "log");
+                    return;
+
+                case 2:
+                    ReceiveAsync(BitConverter.ToUInt16(onReceived.Buffer, 0));
+                    return;
+            }
+
+            OnPacketReceived(sender, onReceived);
         }
 
         /// <summary>
@@ -101,15 +122,10 @@ namespace Sockets
         {
             if (_socket.Connected)
             {
-                // ushort packetDataLength = (ushort)(packetLength - 2);
-                ushort packetDataLength = packetLength;
-
-                BitConverter.TryWriteBytes(_sendBuffer.AsSpan(0), packetDataLength);
-                // BinaryPrimitives.TryWriteUInt16LittleEndian(_sessionSendBuffer.AsSpan(0), packetDataLength);
+                BitConverter.TryWriteBytes(_sendBuffer.AsSpan(0), packetLength);
 
                 packetLength += 2;
 
-                // _sendEventArgs.SetBuffer(_sessionSendBuffer.AsMemory(0, packetLength));
                 _sendEventArgs.SetBuffer(_sendBuffer, 0, packetLength);
 
                 if (!_socket.SendAsync(_sendEventArgs))
@@ -133,12 +149,12 @@ namespace Sockets
         /// <summary>
         ///     The TryConnect Result Callback
         /// </summary>
-        public Action<object, SocketAsyncEventArgs> OnTryConnectResult;
+        public event EventHandler<SocketAsyncEventArgs> OnAttemptConnectResult;
 
         /// <summary>
         ///     The OnDisconnected Callback
         /// </summary>
-        public Action<object, SocketAsyncEventArgs> OnDisconnected;
+        public event EventHandler<SocketAsyncEventArgs> OnDisconnected;
 
         /// <summary>
         ///     Intilizes The Connection Endpoint given the Parameters <paramref name="address"/> and <paramref name="port"/>
@@ -159,7 +175,7 @@ namespace Sockets
 
             if (!_socket.ConnectAsync(_connectEventArgs))
             {
-                OnTryConnectResult(_socket, _connectEventArgs);
+                OnAttemptConnectResult(_socket, _connectEventArgs);
             }
         }
 

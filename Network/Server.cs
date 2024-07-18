@@ -2,11 +2,11 @@
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
-using Sockets.SocketFramingExtensions.Interfaces;
+using Network.Interfaces;
 
-namespace SocketWrappers
+namespace Network
 {
-    public class ServerSocket : IServerSocket
+    public class Server : IServer
     {
         /// <summary>
         /// Server Socket.
@@ -19,53 +19,52 @@ namespace SocketWrappers
         private bool _isListening = false;
 
         /// <summary>
-        /// Disposed State
-        /// </summary>
-        private bool _disposedValue;
-
-        /// <summary>
         /// Server New Client Accepting State.
         /// </summary>
         private bool _isAccepting = false;
 
         /// <summary>
-        /// Wrapper Class For The Event That Fires When a New Client Connects.
+        ///     Wrapper Class For The Event That Fires When a New Client Connects.
         /// </summary>
-        private SocketAsyncEventArgs _onNewConnectionAcceptedEventArgs;
-
-        /// <summary>
-        /// Wrapper Class For The Event That Fires When The Server Disconnects.
-        /// </summary>
-        private SocketAsyncEventArgs _onDisconnectedEventArgs;
-
-
-        /// <summary>
-        /// The Event That Fires When a New Client Connects.
-        /// </summary>
-        public event EventHandler<SocketAsyncEventArgs> OnNewClientConnection;
-
-        /// <summary>
-        /// The Event That Fires When The Server Disconnects.
-        /// </summary>
-        public event EventHandler<SocketAsyncEventArgs> OnServerDisconnected;
+        private SocketAsyncEventArgs _OnNewClientConnectionEventArgs;
 
         /// <summary>
         /// Initializes The Server To Accept Connections Asynchronously.
         /// </summary>
         /// <param name="address">Server Address</param>
         /// <param name="port">Address Port</param>
-        public ServerSocket()
+        public Server()
         {
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
-            _onNewConnectionAcceptedEventArgs = new SocketAsyncEventArgs();
-            _onDisconnectedEventArgs = new SocketAsyncEventArgs();
+            _OnNewClientConnectionEventArgs = new SocketAsyncEventArgs();
 
-            _onNewConnectionAcceptedEventArgs.Completed += OnNewConnection;
-            _onDisconnectedEventArgs.Completed += OnStopped;
+            _OnNewClientConnectionEventArgs.Completed += OnNewConnection;
 
             OnNewClientConnection = (object sender, SocketAsyncEventArgs onDisconnected) => { };
-            OnServerDisconnected = (object sender, SocketAsyncEventArgs onDisconnected) => { };
+        }
+
+        #region IServer
+        /// <summary>
+        /// The Event That Fires When a New Client Connects.
+        /// </summary>
+        public event EventHandler<SocketAsyncEventArgs> OnNewClientConnection;
+
+        /// <summary>
+        /// 
+        /// </summary>
+        private IPEndPoint? _iPEndPoint;
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="address"></param>
+        /// <param name="port"></param>
+        public void Initialize(string address, int port)
+        {
+            _iPEndPoint = new IPEndPoint(IPAddress.Parse(address), port);
+            _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
+            _socket.Bind(_iPEndPoint);
         }
 
         /// <summary>
@@ -73,14 +72,11 @@ namespace SocketWrappers
         /// </summary>
         /// <param name="address"></param>
         /// <param name="port"></param>
-        public void Start(string address, int port)
+        public void StartListening()
         {
             if (!_isListening)
             {
-                _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
-                _socket.Bind(new IPEndPoint(IPAddress.Parse(address), port));
                 _socket.Listen(-1);
-
                 _isListening = true;
             }
             else
@@ -92,18 +88,13 @@ namespace SocketWrappers
         /// <summary>
         ///     If The Server is Running Listen For Incoming Connections.
         /// </summary>
-        public void Stop()
+        public void StopListening()
         {
             if (_isListening)
             {
+                _socket.Listen(0);
                 _socket.Shutdown(SocketShutdown.Both);
-
-                if (!_socket.DisconnectAsync(_onDisconnectedEventArgs))
-                {
-                    OnStopped(_socket, _onDisconnectedEventArgs);
-                }
-
-                _isListening = true;
+                _isListening = false;
             }
             else
             {
@@ -112,21 +103,28 @@ namespace SocketWrappers
         }
 
         /// <summary>
-        /// If The Server is Running Start Accepting Connection Requests Asynchronously Using SocketAsyncEventArgs.
+        ///     If The Server is Running Start Accepting Connection Requests Asynchronously Using SocketAsyncEventArgs.
         /// </summary>
-        public void AcceptConnections()
+        public void AcceptConnection()
         {
             if (_isListening)
             {
-                if (!_socket.AcceptAsync(_onNewConnectionAcceptedEventArgs))
+                if (!_socket.AcceptAsync(_OnNewClientConnectionEventArgs))
                 {
-                    OnNewConnection(_socket, _onNewConnectionAcceptedEventArgs);
+                    OnNewConnection(_socket, _OnNewClientConnectionEventArgs);
                 }
             }
             else
             {
                 Debug.WriteLine("StartAcceptingConnections | Server is Not Listening.", "Error");
+                StopAcceptingConnections();
             }
+        }
+
+        public void StartAcceptingConnections()
+        {
+            _isAccepting = true;
+            AcceptConnection();
         }
 
         /// <summary>
@@ -134,14 +132,7 @@ namespace SocketWrappers
         /// </summary>
         public void StopAcceptingConnections()
         {
-            if (_isListening)
-            {
-                _isAccepting = false;
-            }
-            else
-            {
-                Debug.WriteLine("StopAcceptingConnections | Server is Not Running.", "Error");
-            }
+            _isAccepting = false;
         }
 
         /// <summary>
@@ -151,25 +142,37 @@ namespace SocketWrappers
         /// <param name="onDisconnected"></param>
         private void OnNewConnection(object sender, SocketAsyncEventArgs onDisconnected)
         {
-            OnNewClientConnection.Invoke(sender, onDisconnected);
+            OnNewClientConnection(sender, onDisconnected);
 
             if (_isAccepting)
             {
-                AcceptConnections();
+                AcceptConnection();
             }
         }
 
         /// <summary>
-        /// On Server Disconnection.
+        ///     Shuts down the server and closes the socket.
         /// </summary>
-        /// <param name="sender">The Server Socket Object.</param>
-        /// <param name="onStopped">The SocketAsyncEventArgs that's Used To Start the Async Disconnection.</param>
-        private void OnStopped(object sender, SocketAsyncEventArgs onStopped)
+        public void StopServer()
         {
+            _socket.Shutdown(SocketShutdown.Both); // Stops sending and receiving.  
             _socket.Close();
-
-            OnServerDisconnected.Invoke(sender, onStopped);
         }
+
+        // /// <summary>
+        // /// 
+        // /// </summary>
+        // public void DisconnectClient()
+        // {
+
+        // }
+        #endregion
+
+        #region IDisposable
+        /// <summary>
+        ///     Disposed State
+        /// </summary>
+        private bool _disposedValue;
 
         /// <summary>
         /// 
@@ -183,8 +186,7 @@ namespace SocketWrappers
                 {
                     // Dispose managed resources
                     _socket.Dispose();
-                    _onNewConnectionAcceptedEventArgs.Dispose();
-                    _onDisconnectedEventArgs.Dispose();
+                    _OnNewClientConnectionEventArgs.Dispose();
                 }
                 _disposedValue = true;
             }
@@ -198,5 +200,6 @@ namespace SocketWrappers
             Dispose(true);
             GC.SuppressFinalize(this);
         }
+        #endregion
     }
 }

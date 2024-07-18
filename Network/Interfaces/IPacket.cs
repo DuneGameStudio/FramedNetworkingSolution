@@ -1,8 +1,8 @@
 ﻿using System;
 
-namespace Servers.Interfaces
+namespace Network.Interfaces
 {
-    public interface IPacket
+    public interface IRequestResponce
     {
         ushort Id { get; set; }
 
