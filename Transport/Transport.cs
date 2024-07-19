@@ -11,56 +11,56 @@ namespace Sockets
         /// <summary>
         ///     The Session's Main Socket.
         /// </summary>
-        private readonly Socket _socket;
+        private readonly Socket socket;
 
         /// <summary>
         ///     Initializes The Session Receive Buffer.
         /// </summary>
-        public readonly byte[] _receiveBuffer = new byte[256];
+        public readonly byte[] receiveBuffer = new byte[256];
 
         /// <summary>
         ///     Initializes The Session Send Buffers.
         /// </summary>
-        public readonly byte[] _sendBuffer = new byte[256];
+        public readonly byte[] sendBuffer = new byte[256];
 
         /// <summary>
         ///     Event Arguments For Sending Operation.
         /// </summary>
-        private readonly SocketAsyncEventArgs _sendEventArgs;
+        private readonly SocketAsyncEventArgs sendEventArgs;
 
         /// <summary>
         ///     Event Arguments For Receiving Operation.
         /// </summary>
-        private readonly SocketAsyncEventArgs _receiveEventArgs;
+        private readonly SocketAsyncEventArgs receiveEventArgs;
 
         /// <summary>
         ///     Event Arguments For Sending Operation.
         /// </summary>
-        private readonly SocketAsyncEventArgs _connectEventArgs;
+        private readonly SocketAsyncEventArgs connectEventArgs;
 
         /// <summary>
         ///     Event Arguments For Receiving Operation.
         /// </summary>
-        private readonly SocketAsyncEventArgs _disconnectEventArgs;
+        private readonly SocketAsyncEventArgs disconnectEventArgs;
 
         public Transport(Socket socket)
         {
-            _socket = socket;
+            this.socket = socket;
 
             OnPacketSent += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnPacketReceived += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnAttemptConnectResult += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnDisconnected += (object sender, SocketAsyncEventArgs onDisconnected) => { };
 
-            _sendEventArgs = new SocketAsyncEventArgs();
-            _receiveEventArgs = new SocketAsyncEventArgs();
-            _connectEventArgs = new SocketAsyncEventArgs();
-            _disconnectEventArgs = new SocketAsyncEventArgs();
+            sendEventArgs = new SocketAsyncEventArgs();
+            receiveEventArgs = new SocketAsyncEventArgs();
+            connectEventArgs = new SocketAsyncEventArgs();
+            disconnectEventArgs = new SocketAsyncEventArgs();
 
-            _sendEventArgs.Completed += OnPacketSent;
-            _receiveEventArgs.Completed += PacketReceived;
-            _connectEventArgs.Completed += OnAttemptConnectResult;
-            _disconnectEventArgs.Completed += OnDisconnected;
+            sendEventArgs.Completed += OnPacketSent;
+            receiveEventArgs.Completed += PacketReceived;
+            connectEventArgs.Completed += OnAttemptConnectResult;
+            disconnectEventArgs.Completed += OnDisconnected;
         }
 
         #region ITransporte
@@ -81,13 +81,13 @@ namespace Sockets
         /// <param name="bufferSize">The Size of the Buffer to be Allocated for the Receiving of Data From Client.</param>
         public void ReceiveAsync(int bufferSize = 2)
         {
-            if (_socket.Connected)
+            if (socket.Connected)
             {
-                _receiveEventArgs.SetBuffer(_receiveBuffer, 0, bufferSize);
+                receiveEventArgs.SetBuffer(receiveBuffer, 0, bufferSize);
 
-                if (!_socket.ReceiveAsync(_receiveEventArgs))
+                if (!socket.ReceiveAsync(receiveEventArgs))
                 {
-                    PacketReceived(_socket, _receiveEventArgs);
+                    PacketReceived(socket, receiveEventArgs);
                 }
             }
             else
@@ -120,17 +120,17 @@ namespace Sockets
         /// <param name="packetLength">The Length of the Packet That Needs to be Sent.</param>
         public void SendAsync(ushort packetLength)
         {
-            if (_socket.Connected)
+            if (socket.Connected)
             {
-                BitConverter.TryWriteBytes(_sendBuffer.AsSpan(0), packetLength);
+                BitConverter.TryWriteBytes(sendBuffer.AsSpan(0), packetLength);
 
                 packetLength += 2;
 
-                _sendEventArgs.SetBuffer(_sendBuffer, 0, packetLength);
+                sendEventArgs.SetBuffer(sendBuffer, 0, packetLength);
 
-                if (!_socket.SendAsync(_sendEventArgs))
+                if (!socket.SendAsync(sendEventArgs))
                 {
-                    OnPacketSent(_socket, _sendEventArgs);
+                    OnPacketSent(socket, sendEventArgs);
                 }
             }
             else
@@ -171,11 +171,11 @@ namespace Sockets
         /// </summary>
         public void AttemptConnectAsync()
         {
-            _connectEventArgs.RemoteEndPoint = iPEndPoint;
+            connectEventArgs.RemoteEndPoint = iPEndPoint;
 
-            if (!_socket.ConnectAsync(_connectEventArgs))
+            if (!socket.ConnectAsync(connectEventArgs))
             {
-                OnAttemptConnectResult(_socket, _connectEventArgs);
+                OnAttemptConnectResult(socket, connectEventArgs);
             }
         }
 
@@ -184,11 +184,11 @@ namespace Sockets
         /// </summary>
         public void DisconnectAsync()
         {
-            _socket.Shutdown(SocketShutdown.Both); // Stops sending and receiving.  
+            socket.Shutdown(SocketShutdown.Both); // Stops sending and receiving.  
 
-            if (!_socket.DisconnectAsync(_disconnectEventArgs))
+            if (!socket.DisconnectAsync(disconnectEventArgs))
             {
-                OnDisconnected(_socket, _disconnectEventArgs);
+                OnDisconnected(socket, disconnectEventArgs);
             }
         }
         #endregion
@@ -210,9 +210,9 @@ namespace Sockets
                 if (disposing)
                 {
                     // Dispose managed resources
-                    _socket.Dispose();
-                    _sendEventArgs.Dispose();
-                    _receiveEventArgs.Dispose();
+                    socket.Dispose();
+                    sendEventArgs.Dispose();
+                    receiveEventArgs.Dispose();
                 }
                 _disposedValue = true;
             }

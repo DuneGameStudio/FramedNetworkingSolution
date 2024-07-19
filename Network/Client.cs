@@ -2,32 +2,53 @@ using System;
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
-using System.Buffers.Binary;
+using FramedNetworkingSolution.Network.Interfaces;
 
 namespace Network
 {
-    public class Client
+    public class Client : IClient
     {
         /// <summary>
         ///     The Session's Main Socket.
         /// </summary>
-        private readonly Socket _socket;
+        private readonly Socket socket;
 
         /// <summary>
         ///     Connection Status.
         /// </summary>
-        private bool _connected;
+        private bool connected;
 
         /// <summary>
         ///     Event Arguments For Sending Operation.
         /// </summary>
-        private readonly SocketAsyncEventArgs _connectEventArgs;
+        private readonly SocketAsyncEventArgs connectEventArgs;
 
         /// <summary>
         ///     Event Arguments For Disconnecting Operation.
         /// </summary>
-        private readonly SocketAsyncEventArgs _disconnectEventArgs;
+        private readonly SocketAsyncEventArgs disconnectEventArgs;
 
+        /// <summary>
+        ///     Server Session Constructor That Initializes the Socket From An Already Initialized Socket.
+        /// </summary>
+        /// <param name="socket">The Connected Socket</param>
+        public Client()
+        {
+            socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+
+            connectEventArgs = new SocketAsyncEventArgs();
+            disconnectEventArgs = new SocketAsyncEventArgs();
+
+            OnConnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
+            OnDisconnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
+
+            connectEventArgs.Completed += OnAttemptConnectResponse;
+            disconnectEventArgs.Completed += OnDisconnected;
+
+            connected = false;
+        }
+
+        #region IClient
         /// <summary>
         ///     On Packet Received Event Handler.
         /// </summary>
@@ -39,38 +60,17 @@ namespace Network
         public event EventHandler<SocketAsyncEventArgs> OnDisconnectedHandler;
 
         /// <summary>
-        ///     Server Session Constructor That Initializes the Socket From An Already Initialized Socket.
-        /// </summary>
-        /// <param name="socket">The Connected Socket</param>
-        public Client()
-        {
-            _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
-            _connectEventArgs = new SocketAsyncEventArgs();
-            _disconnectEventArgs = new SocketAsyncEventArgs();
-
-            OnConnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
-            OnDisconnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
-
-            _connectEventArgs.Completed += OnAttemptConnectResponse;
-            _disconnectEventArgs.Completed += OnDisconnected;
-
-            _connected = true;
-        }
-
-        #region IClient
-        /// <summary>
         ///     
         /// </summary>
         /// <param name="address"></param>
         /// <param name="port"></param>
         public void AttemptConnectAsync(string address, int port)
         {
-            _connectEventArgs.RemoteEndPoint = new IPEndPoint(IPAddress.Parse(address), port);
+            connectEventArgs.RemoteEndPoint = new IPEndPoint(IPAddress.Parse(address), port);
 
-            if (!_socket.ConnectAsync(_connectEventArgs))
+            if (!socket.ConnectAsync(connectEventArgs))
             {
-                OnAttemptConnectResponse(_socket, _connectEventArgs);
+                OnAttemptConnectResponse(socket, connectEventArgs);
             }
         }
 
@@ -83,13 +83,13 @@ namespace Network
         {
             if (tryConnectEventArgs.SocketError == SocketError.Success)
             {
-                _connected = true;
+                connected = true;
 
                 OnConnectedHandler(sender, tryConnectEventArgs);
             }
             else
             {
-                _connected = false;
+                connected = false;
 
                 Debug.WriteLine("Session Try Reconnect Failed", "log");
             }
@@ -100,22 +100,22 @@ namespace Network
         /// </summary>
         public void Disconnect()
         {
-            _connected = false;
+            connected = false;
 
-            _socket.Shutdown(SocketShutdown.Both);
+            socket.Shutdown(SocketShutdown.Both);
 
-            if (!_socket.DisconnectAsync(_disconnectEventArgs))
+            if (!socket.DisconnectAsync(disconnectEventArgs))
             {
-                OnDisconnected(_socket, _disconnectEventArgs);
+                OnDisconnected(socket, disconnectEventArgs);
             }
         }
 
         /// <summary>
-        /// ///     On Session Socket Disconnect Callback.
+        ///     On Session Socket Disconnect Callback.
         /// </summary>
         public void OnDisconnected(object sender, SocketAsyncEventArgs onDisconnected)
         {
-            _socket.Close();
+            socket.Close();
 
             OnDisconnectedHandler(sender, onDisconnected); //, Id);
         }
@@ -126,7 +126,7 @@ namespace Network
         /// <summary>
         ///     Disposed State
         /// </summary>
-        private bool _disposedValue;
+        private bool disposedValue;
 
         /// <summary>
         /// 
@@ -134,16 +134,16 @@ namespace Network
         /// <param name="disposing"></param>
         protected virtual void Dispose(bool disposing)
         {
-            if (!_disposedValue)
+            if (!disposedValue)
             {
                 if (disposing)
                 {
-                    // Dispose managed resources
-                    _socket.Dispose();
-                    _connectEventArgs.Dispose();
-                    _disconnectEventArgs.Dispose();
+                    // Dispose Managed Resources
+                    socket.Dispose();
+                    connectEventArgs.Dispose();
+                    disconnectEventArgs.Dispose();
                 }
-                _disposedValue = true;
+                disposedValue = true;
             }
         }
 
