@@ -1,12 +1,14 @@
 using System;
+using Transport;
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
-using FramedNetworkingSolution.Network.Interfaces;
+using SocketConnection.Interfaces;
+using Transport.Interfaces;
 
-namespace Network
+namespace SocketConnection
 {
-    public class Client : IClient
+    public class ClientConnector : IClient
     {
         /// <summary>
         ///     The Session's Main Socket.
@@ -32,14 +34,14 @@ namespace Network
         ///     Server Session Constructor That Initializes the Socket From An Already Initialized Socket.
         /// </summary>
         /// <param name="socket">The Connected Socket</param>
-        public Client()
+        public ClientConnector()
         {
             socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
             connectEventArgs = new SocketAsyncEventArgs();
             disconnectEventArgs = new SocketAsyncEventArgs();
 
-            OnConnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
+            OnConnectedHandler += (object sender, Transport.Interfaces.ITransport transport) => { };
             OnDisconnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
 
             connectEventArgs.Completed += OnAttemptConnectResponse;
@@ -52,7 +54,7 @@ namespace Network
         /// <summary>
         ///     On Packet Received Event Handler.
         /// </summary>
-        public event EventHandler<SocketAsyncEventArgs> OnConnectedHandler;
+        public event EventHandler<Transport.Interfaces.ITransport> OnConnectedHandler;
 
         /// <summary>
         ///     On Packet Disconnect Event Handler.
@@ -78,14 +80,14 @@ namespace Network
         ///     Client Async Reconnection Attempt Callback.
         /// </summary>
         /// <param name="sender">The Session Socket</param>
-        /// <param name="tryConnectEventArgs">Reconnection Event Args</param>
-        public void OnAttemptConnectResponse(object sender, SocketAsyncEventArgs tryConnectEventArgs)
+        /// <param name="connectEventArgs">Reconnection Event Args</param>
+        public void OnAttemptConnectResponse(object sender, SocketAsyncEventArgs connectEventArgs)
         {
-            if (tryConnectEventArgs.SocketError == SocketError.Success)
+            if (connectEventArgs.SocketError == SocketError.Success)
             {
                 connected = true;
 
-                OnConnectedHandler(sender, tryConnectEventArgs);
+                OnConnectedHandler(sender, new Transport.Transport(connectEventArgs.AcceptSocket));
             }
             else
             {

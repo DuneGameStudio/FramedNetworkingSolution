@@ -2,11 +2,11 @@ using System;
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
-using Sockets.Interfaces.Session;
+using Transport.Interfaces;
 
-namespace Sockets
+namespace Transport
 {
-    public class Transport : ITransport
+    public class Transport : Interfaces.ITransport
     {
         /// <summary>
         ///     The Session's Main Socket.

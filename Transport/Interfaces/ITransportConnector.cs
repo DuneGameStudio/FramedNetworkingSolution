@@ -1,7 +1,7 @@
 using System;
 using System.Net.Sockets;
 
-namespace Sockets.Interfaces.Session
+namespace Transport.Interfaces
 {
     public interface ITransportConnector
     {

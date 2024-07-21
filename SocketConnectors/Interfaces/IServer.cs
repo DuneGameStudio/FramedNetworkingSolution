@@ -1,12 +1,11 @@
 using System;
-using System.Net.Sockets;
-using Sockets.Interfaces.Session;
+using Transport.Interfaces;
 
-namespace Network.Interfaces
+namespace SocketConnection.Interfaces
 {
     public interface IServer : IDisposable
     {
-        event EventHandler<ITransport> OnNewClientConnection;
+        event EventHandler<Transport.Interfaces.ITransport> OnNewClientConnection;
         void Initialize(string address, int port);
         void StartListening();
         void StopListening();
@@ -14,6 +13,5 @@ namespace Network.Interfaces
         void StartAcceptingConnections();
         void StopAcceptingConnections();
         void StopServer();
-        // void DisconnectClient();
     }
 }
