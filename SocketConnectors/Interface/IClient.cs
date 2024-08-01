@@ -1,12 +1,12 @@
 using System;
 using System.Net.Sockets;
-using Transport.Interfaces;
+using FramedNetworkingSolution.Transport.Interface;
 
-namespace SocketConnection.Interfaces
+namespace FramedNetworkingSolution.SocketConnection.Interface
 {
     public interface IClient : IDisposable
     {
-        public event EventHandler<Transport.Interfaces.ITransport> OnConnectedHandler;
+        public event EventHandler<ITransport> OnConnectedHandler;
         public event EventHandler<SocketAsyncEventArgs> OnDisconnectedHandler;
         public void AttemptConnectAsync(string address, int port);
         public void OnAttemptConnectResponse(object sender, SocketAsyncEventArgs tryConnectEventArgs);

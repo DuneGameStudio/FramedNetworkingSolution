@@ -1,15 +1,15 @@
 using System;
-using Transport.Interfaces;
+using FramedNetworkingSolution.Transport.Interface;
 
-namespace SocketConnection.Interfaces
+namespace FramedNetworkingSolution.SocketConnection.Interface
 {
     public interface IServer : IDisposable
     {
-        event EventHandler<Transport.Interfaces.ITransport> OnNewClientConnection;
+        event EventHandler<ITransport> onNewClientConnection;
         void Initialize(string address, int port);
         void StartListening();
         void StopListening();
-        void AcceptConnection();
+        // void AcceptConnection();
         void StartAcceptingConnections();
         void StopAcceptingConnections();
         void StopServer();

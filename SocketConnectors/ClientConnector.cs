@@ -1,12 +1,10 @@
 using System;
-using Transport;
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
-using SocketConnection.Interfaces;
-using Transport.Interfaces;
+using FramedNetworkingSolution.SocketConnection.Interface;
 
-namespace SocketConnection
+namespace FramedNetworkingSolution.SocketConnection
 {
     public class ClientConnector : IClient
     {
@@ -41,7 +39,7 @@ namespace SocketConnection
             connectEventArgs = new SocketAsyncEventArgs();
             disconnectEventArgs = new SocketAsyncEventArgs();
 
-            OnConnectedHandler += (object sender, Transport.Interfaces.ITransport transport) => { };
+            OnConnectedHandler += (object sender, Transport.Interface.ITransport transport) => { };
             OnDisconnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
 
             connectEventArgs.Completed += OnAttemptConnectResponse;
@@ -54,7 +52,7 @@ namespace SocketConnection
         /// <summary>
         ///     On Packet Received Event Handler.
         /// </summary>
-        public event EventHandler<Transport.Interfaces.ITransport> OnConnectedHandler;
+        public event EventHandler<Transport.Interface.ITransport> OnConnectedHandler;
 
         /// <summary>
         ///     On Packet Disconnect Event Handler.
@@ -87,7 +85,7 @@ namespace SocketConnection
             {
                 connected = true;
 
-                OnConnectedHandler(sender, new Transport.Transport(connectEventArgs.AcceptSocket));
+                OnConnectedHandler(sender, new Transport.Transport(socket));
             }
             else
             {

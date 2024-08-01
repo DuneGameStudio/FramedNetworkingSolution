@@ -1,12 +1,12 @@
 ﻿using System;
-using Transport;
+using FramedNetworkingSolution.Transport;
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
-using SocketConnection.Interfaces;
-using Transport.Interfaces;
+using FramedNetworkingSolution.SocketConnection.Interface;
+using FramedNetworkingSolution.Transport.Interface;
 
-namespace SocketConnection
+namespace FramedNetworkingSolution.SocketConnection
 {
     public class ServerConnector : IServer
     {
@@ -28,7 +28,7 @@ namespace SocketConnection
         /// <summary>
         ///     Wrapper Class For The Event That Fires When a New Client Connects.
         /// </summary>
-        private SocketAsyncEventArgs OnNewClientConnectionEventArgs;
+        private SocketAsyncEventArgs onNewClientConnectionEventArgs;
 
         /// <summary>
         ///     Initializes The Server To Accept Connections Asynchronously.
@@ -39,18 +39,18 @@ namespace SocketConnection
         {
             socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
-            OnNewClientConnectionEventArgs = new SocketAsyncEventArgs();
+            onNewClientConnectionEventArgs = new SocketAsyncEventArgs();
 
-            OnNewClientConnectionEventArgs.Completed += OnNewConnection;
+            onNewClientConnectionEventArgs.Completed += OnNewConnection;
 
-            OnNewClientConnection = (object sender, ITransport Transport) => { };
+            onNewClientConnection = (object sender, ITransport Transport) => { };
         }
 
         #region IServer
         /// <summary>
         /// The Event That Fires When a New Client Connects.
         /// </summary>
-        public event EventHandler<ITransport> OnNewClientConnection;
+        public event EventHandler<ITransport> onNewClientConnection;
 
         /// <summary>
         /// 
@@ -107,13 +107,13 @@ namespace SocketConnection
         /// <summary>
         ///     If The Server is Running Start Accepting Connection Requests Asynchronously Using SocketAsyncEventArgs.
         /// </summary>
-        public void AcceptConnection()
+        void AcceptConnection()
         {
             if (isListening)
             {
-                if (!socket.AcceptAsync(OnNewClientConnectionEventArgs))
+                if (!socket.AcceptAsync(onNewClientConnectionEventArgs))
                 {
-                    OnNewConnection(socket, OnNewClientConnectionEventArgs);
+                    OnNewConnection(socket, onNewClientConnectionEventArgs);
                 }
             }
             else
@@ -144,7 +144,9 @@ namespace SocketConnection
         /// <param name="onDisconnected"></param>
         private void OnNewConnection(object sender, SocketAsyncEventArgs onNewClientConnectionEventArgs)
         {
-            OnNewClientConnection(sender, new Transport.Transport(onNewClientConnectionEventArgs.AcceptSocket));
+            onNewClientConnection(sender, new Transport.Transport(onNewClientConnectionEventArgs.AcceptSocket));
+
+            onNewClientConnectionEventArgs.AcceptSocket = null;
 
             if (isAccepting)
             {
@@ -188,7 +190,7 @@ namespace SocketConnection
                 {
                     // Dispose managed resources
                     socket.Dispose();
-                    OnNewClientConnectionEventArgs.Dispose();
+                    onNewClientConnectionEventArgs.Dispose();
                 }
                 _disposedValue = true;
             }

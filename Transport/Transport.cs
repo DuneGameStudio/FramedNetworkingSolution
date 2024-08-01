@@ -2,11 +2,12 @@ using System;
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
-using Transport.Interfaces;
+using FramedNetworkingSolution.Utils;
+using FramedNetworkingSolution.Transport.Interface;
 
-namespace Transport
+namespace FramedNetworkingSolution.Transport
 {
-    public class Transport : Interfaces.ITransport
+    public class Transport : ITransport
     {
         /// <summary>
         ///     The Session's Main Socket.
@@ -16,12 +17,12 @@ namespace Transport
         /// <summary>
         ///     Initializes The Session Receive Buffer.
         /// </summary>
-        public readonly byte[] receiveBuffer = new byte[256];
+        public SegmantedBuffer receiveBuffer { get; set; }
 
         /// <summary>
         ///     Initializes The Session Send Buffers.
         /// </summary>
-        public readonly byte[] sendBuffer = new byte[256];
+        public SegmantedBuffer sendBuffer { get; set; }
 
         /// <summary>
         ///     Event Arguments For Sending Operation.
@@ -43,9 +44,16 @@ namespace Transport
         /// </summary>
         private readonly SocketAsyncEventArgs disconnectEventArgs;
 
+        /// <summary>
+        ///     
+        /// </summary>
+        /// <param name="socket"></param>
         public Transport(Socket socket)
         {
             this.socket = socket;
+
+            sendBuffer = new SegmantedBuffer(8192, 256);
+            receiveBuffer = new SegmantedBuffer(8192, 256);
 
             OnPacketSent += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnPacketReceived += (object sender, SocketAsyncEventArgs onDisconnected) => { };
@@ -83,19 +91,28 @@ namespace Transport
         {
             if (socket.Connected)
             {
-                receiveEventArgs.SetBuffer(receiveBuffer, 0, bufferSize);
-
-                if (!socket.ReceiveAsync(receiveEventArgs))
+                Debug.WriteLine($"Receiving {bufferSize} bytes", "Log");
+                if (receiveBuffer.TryReserveMemory(bufferSize, out Memory<byte> buffer))
                 {
-                    PacketReceived(socket, receiveEventArgs);
+                    receiveEventArgs.SetBuffer(buffer);
+
+                    if (!socket.ReceiveAsync(receiveEventArgs))
+                    {
+                        PacketReceived(socket, receiveEventArgs);
+                    }
+
+                    return;
                 }
             }
-            else
-            {
-                Debug.WriteLine("Receive | Client Is Not Connected", "error");
-            }
+
+            Debug.WriteLine("Receive | Client Is Not Connected", "error");
         }
 
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="onReceived"></param>
         private void PacketReceived(object sender, SocketAsyncEventArgs onReceived)
         {
             switch (onReceived.BytesTransferred)
@@ -103,9 +120,10 @@ namespace Transport
                 case 0:
                     Debug.WriteLine("Received And Empty Packet", "log");
                     return;
-
+                case 1:
+                    return;
                 case 2:
-                    ReceiveAsync(BitConverter.ToUInt16(onReceived.Buffer, 0));
+                    ReceiveAsync(BitConverter.ToUInt16(onReceived.MemoryBuffer.Span));
                     return;
             }
 
@@ -118,15 +136,15 @@ namespace Transport
         /// </summary>
         /// <param name="packet">A Memory Of a Byte Array Containing the Data Needed To Be Sent.</param>
         /// <param name="packetLength">The Length of the Packet That Needs to be Sent.</param>
-        public void SendAsync(ushort packetLength)
+        public void SendAsync(int packetLength, int dataLocation)
         {
             if (socket.Connected)
             {
-                BitConverter.TryWriteBytes(sendBuffer.AsSpan(0), packetLength);
+                Memory<byte> memory = sendBuffer.GetMemoryAtLocation(dataLocation, packetLength);
 
-                packetLength += 2;
+                BitConverter.TryWriteBytes(memory.Span, (ushort)packetLength);
 
-                sendEventArgs.SetBuffer(sendBuffer, 0, packetLength);
+                sendEventArgs.SetBuffer(memory);
 
                 if (!socket.SendAsync(sendEventArgs))
                 {
@@ -140,7 +158,7 @@ namespace Transport
         }
         #endregion
 
-        #region ITransportConnector 
+        #region ITransportConnector
         /// <summary>
         ///     The IP of the Other Connected End Point 
         /// </summary>
@@ -209,6 +227,7 @@ namespace Transport
             {
                 if (disposing)
                 {
+                    Debug.WriteLine("Disposing Transport");
                     // Dispose managed resources
                     socket.Dispose();
                     sendEventArgs.Dispose();
