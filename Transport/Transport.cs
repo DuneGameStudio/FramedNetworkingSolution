@@ -12,7 +12,7 @@ namespace FramedNetworkingSolution.Transport
         /// <summary>
         ///     The Session's Main Socket.
         /// </summary>
-        private readonly Socket socket;
+        public Socket socket { get; set; }
 
         /// <summary>
         ///     Initializes The Session Receive Buffer.
@@ -91,10 +91,9 @@ namespace FramedNetworkingSolution.Transport
         {
             if (socket.Connected)
             {
-                Debug.WriteLine($"Receiving {bufferSize} bytes", "Log");
-                if (receiveBuffer.TryReserveMemory(bufferSize, out Memory<byte> buffer))
+                if (receiveBuffer.ReserveAndRegisterMemory(out Memory<byte> memory, out int index))
                 {
-                    receiveEventArgs.SetBuffer(buffer);
+                    receiveEventArgs.SetBuffer(memory.Slice(0, bufferSize));
 
                     if (!socket.ReceiveAsync(receiveEventArgs))
                     {
@@ -136,13 +135,12 @@ namespace FramedNetworkingSolution.Transport
         /// </summary>
         /// <param name="packet">A Memory Of a Byte Array Containing the Data Needed To Be Sent.</param>
         /// <param name="packetLength">The Length of the Packet That Needs to be Sent.</param>
-        public void SendAsync(int packetLength, int dataLocation)
+        // public void SendAsync(int packetLength, int index)
+        public void SendAsync(Memory<byte> memory)
         {
             if (socket.Connected)
             {
-                Memory<byte> memory = sendBuffer.GetMemoryAtLocation(dataLocation, packetLength);
-
-                BitConverter.TryWriteBytes(memory.Span, (ushort)packetLength);
+                BitConverter.TryWriteBytes(memory.Span, (ushort)(memory.Length - 2));
 
                 sendEventArgs.SetBuffer(memory);
 

@@ -11,11 +11,6 @@ namespace FramedNetworkingSolution.Utils
         byte[] data;
 
         /// <summary>
-        ///     Data Array Length.
-        /// </summary>
-        public int arrayLength;
-
-        /// <summary>
         ///     Packet Segmant Size.
         /// </summary>
         int segmentSize;
@@ -23,28 +18,28 @@ namespace FramedNetworkingSolution.Utils
         /// <summary>
         ///     Number of segments in the Byte Array
         /// </summary>
-        int count
+        int segmentCount
         {
             get
             {
-                return arrayLength / segmentSize;
+                return data.Length / segmentSize;
             }
         }
 
         /// <summary>
+        ///     
+        /// </summary>
+        int freeFrom;
+
+        /// <summary>
         ///     Next Free Segmant Count.
         /// </summary>
-        int nextFree;
+        int freeUpTo;
 
         /// <summary>
         ///     
         /// </summary>
-        public Memory<byte> currentInUseMemory;
-
-        /// <summary>
-        ///     
-        /// </summary>
-        public int currentInUseMemoryArrayLocation;
+        public int currentIndex;
 
         /// <summary>
         ///     
@@ -53,74 +48,74 @@ namespace FramedNetworkingSolution.Utils
         /// <param name="segmentSize"></param>
         public SegmantedBuffer(int arrayLength = 8192, int segmentSize = 256)
         {
-            this.arrayLength = arrayLength;
             this.segmentSize = segmentSize;
 
             data = new byte[arrayLength];
 
-            nextFree = 1;
+            freeFrom = 1;
+            freeUpTo = segmentCount;
         }
 
         /// <summary>
-        ///     
-        /// </summary>
-        /// <param name="size"></param>
-        /// <returns></returns>
-        public bool TryReserveMemory(int size, out Memory<byte> memory)
-        {
-            if (nextFree == 0)
-            {
-                memory = new Memory<byte>();
-                return false;
-            }
-
-            currentInUseMemoryArrayLocation = segmentSize * nextFree - segmentSize;
-            memory = data.AsMemory(currentInUseMemoryArrayLocation, size);
-            currentInUseMemory = memory;
-
-            if (nextFree + 1 > count)
-            {
-                nextFree = 0;
-            }
-            else
-            {
-                nextFree++;
-            }
-            return true;
-        }
-
-        public Memory<byte> GetMemoryAtLocation(int currentInUseMemoryArrayLocation, int size)
-        {
-            return data.AsMemory(currentInUseMemoryArrayLocation, size);
-        }
-
-        /// <summary>
-        ///     Reserves whole Segmant
+        ///     0123456
+        ///     1234567
         /// </summary>
         /// <param name="memory"></param>
+        /// <param name="index"></param>
         /// <returns></returns>
-        public bool TryReserveAWholeSegmant(out Memory<byte> memory)
+        public bool ReserveAndRegisterMemory(out Memory<byte> memory, out int index)
         {
-            if (nextFree == 0)
+            if (freeFrom == 0)
             {
                 memory = new Memory<byte>();
+                index = 0;
                 return false;
             }
 
-            currentInUseMemoryArrayLocation = segmentSize * nextFree - segmentSize;
-            memory = data.AsMemory(currentInUseMemoryArrayLocation + 2, segmentSize - 2);
-            
-            // currentInUseMemory = data.AsMemory(currentInUseMemoryArrayLocation, segmentSize);
+            index = freeFrom;
+            currentIndex = freeFrom;
+            var nextSegmentStart = (freeFrom - 1) * segmentSize;
+            memory = data.AsMemory(nextSegmentStart, segmentSize);
 
-            if (nextFree + 1 > count)
+            if (freeFrom + 1 > segmentCount)
             {
-                nextFree = 0;
+                if (freeUpTo == segmentCount)
+                {
+                    freeUpTo = 0;
+                    freeFrom = 0;
+                    return false;
+                }
+                else if (freeUpTo >= 1)
+                {
+                    freeFrom = 1;
+                    return true;
+                }
             }
-            else
+            else if (freeFrom + 1 > freeUpTo && freeFrom <= freeUpTo)
             {
-                nextFree++;
+                freeUpTo = 0;
+                freeFrom = 0;
+                return false;
             }
+
+            freeFrom++;
+
             return true;
+        }
+
+        public void UnregisterMemory(int index)
+        {
+            freeUpTo = index;
+
+            if (freeFrom == 0)
+            {
+                freeFrom = index;
+            }
+        }
+
+        public Memory<byte> GetRegisteredMemory(int index, int length)
+        {
+            return data.AsMemory((index - 1) * segmentSize, length);
         }
     }
 }
