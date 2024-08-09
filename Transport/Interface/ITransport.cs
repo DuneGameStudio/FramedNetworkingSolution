@@ -7,8 +7,8 @@ namespace FramedNetworkingSolution.Transport.Interface
     public interface ITransport : ITransportConnector, IDisposable
     {
         public Socket socket { get; set; }
-        SegmantedBuffer receiveBuffer { get; set; }
-        SegmantedBuffer sendBuffer { get; set; }
+        SegmentedBuffer receiveBuffer { get; set; }
+        SegmentedBuffer sendBuffer { get; set; }
         event EventHandler<SocketAsyncEventArgs> OnPacketSent;
         event EventHandler<SocketAsyncEventArgs> OnPacketReceived;
         void ReceiveAsync(int bufferSize = 2);
