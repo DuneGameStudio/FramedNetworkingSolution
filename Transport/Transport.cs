@@ -17,12 +17,12 @@ namespace FramedNetworkingSolution.Transport
         /// <summary>
         ///     Initializes The Session Receive Buffer.
         /// </summary>
-        public SegmantedBuffer receiveBuffer { get; set; }
+        public SegmentedBuffer receiveBuffer { get; set; }
 
         /// <summary>
         ///     Initializes The Session Send Buffers.
         /// </summary>
-        public SegmantedBuffer sendBuffer { get; set; }
+        public SegmentedBuffer sendBuffer { get; set; }
 
         /// <summary>
         ///     Event Arguments For Sending Operation.
@@ -52,8 +52,8 @@ namespace FramedNetworkingSolution.Transport
         {
             this.socket = socket;
 
-            sendBuffer = new SegmantedBuffer(8192, 256);
-            receiveBuffer = new SegmantedBuffer(8192, 256);
+            sendBuffer = new SegmentedBuffer(8192, 256);
+            receiveBuffer = new SegmentedBuffer(8192, 256);
 
             OnPacketSent += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnPacketReceived += (object sender, SocketAsyncEventArgs onDisconnected) => { };
@@ -91,7 +91,7 @@ namespace FramedNetworkingSolution.Transport
         {
             if (socket.Connected)
             {
-                if (receiveBuffer.ReserveAndRegisterMemory(out Memory<byte> memory, out int index))
+                if (receiveBuffer.ReserveAndRegisterMemory(out Memory<byte> memory))
                 {
                     receiveEventArgs.SetBuffer(memory.Slice(0, bufferSize));
 

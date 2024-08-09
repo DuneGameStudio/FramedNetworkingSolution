@@ -3,7 +3,7 @@ using System.Diagnostics;
 
 namespace FramedNetworkingSolution.Utils
 {
-    public class SegmantedBuffer
+    public class SegmentedBuffer
     {
         /// <summary>
         ///     The byte array that holds all the data.
@@ -46,7 +46,7 @@ namespace FramedNetworkingSolution.Utils
         /// </summary>
         /// <param name="arrayLength"></param>
         /// <param name="segmentSize"></param>
-        public SegmantedBuffer(int arrayLength = 8192, int segmentSize = 256)
+        public SegmentedBuffer(int arrayLength = 8192, int segmentSize = 256)
         {
             this.segmentSize = segmentSize;
 
@@ -63,16 +63,14 @@ namespace FramedNetworkingSolution.Utils
         /// <param name="memory"></param>
         /// <param name="index"></param>
         /// <returns></returns>
-        public bool ReserveAndRegisterMemory(out Memory<byte> memory, out int index)
+        public bool ReserveAndRegisterMemory(out Memory<byte> memory)
         {
             if (freeFrom == 0)
             {
                 memory = new Memory<byte>();
-                index = 0;
                 return false;
             }
 
-            index = freeFrom;
             currentIndex = freeFrom;
             var nextSegmentStart = (freeFrom - 1) * segmentSize;
             memory = data.AsMemory(nextSegmentStart, segmentSize);
