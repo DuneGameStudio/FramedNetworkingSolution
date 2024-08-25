@@ -2,8 +2,8 @@
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
-using FramedNetworkingSolution.SocketConnection.Interface;
 using FramedNetworkingSolution.Transport.Interface;
+using FramedNetworkingSolution.SocketConnection.Interface;
 
 namespace FramedNetworkingSolution.SocketConnection
 {

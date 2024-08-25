@@ -14,11 +14,6 @@ namespace FramedNetworkingSolution.SocketConnection
         private readonly Socket socket;
 
         /// <summary>
-        ///     Connection Status.
-        /// </summary>
-        private bool connected;
-
-        /// <summary>
         ///     Event Arguments For Sending Operation.
         /// </summary>
         private readonly SocketAsyncEventArgs connectEventArgs;
@@ -44,8 +39,6 @@ namespace FramedNetworkingSolution.SocketConnection
 
             connectEventArgs.Completed += OnAttemptConnectResponse;
             disconnectEventArgs.Completed += OnDisconnected;
-
-            connected = false;
         }
 
         #region IClient
@@ -83,14 +76,10 @@ namespace FramedNetworkingSolution.SocketConnection
         {
             if (connectEventArgs.SocketError == SocketError.Success)
             {
-                connected = true;
-
                 OnConnectedHandler(sender, new Transport.Transport(socket));
             }
             else
             {
-                connected = false;
-
                 Debug.WriteLine("Session Try Reconnect Failed", "log");
             }
         }
@@ -100,8 +89,6 @@ namespace FramedNetworkingSolution.SocketConnection
         /// </summary>
         public void Disconnect()
         {
-            connected = false;
-
             socket.Shutdown(SocketShutdown.Both);
 
             if (!socket.DisconnectAsync(disconnectEventArgs))

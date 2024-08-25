@@ -91,7 +91,7 @@ namespace FramedNetworkingSolution.Transport
         {
             if (socket.Connected)
             {
-                if (receiveBuffer.ReserveAndRegisterMemory(out Memory<byte> memory))
+                if (receiveBuffer.ReserveMemory(out Memory<byte> memory, false))
                 {
                     receiveEventArgs.SetBuffer(memory.Slice(0, bufferSize));
 

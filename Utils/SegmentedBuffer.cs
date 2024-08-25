@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 
 namespace FramedNetworkingSolution.Utils
 {
@@ -39,7 +38,7 @@ namespace FramedNetworkingSolution.Utils
         /// <summary>
         ///     
         /// </summary>
-        public int currentIndex;
+        public int currentSegmentNumber;
 
         /// <summary>
         ///     
@@ -57,13 +56,13 @@ namespace FramedNetworkingSolution.Utils
         }
 
         /// <summary>
-        ///     0123456
-        ///     1234567
+        ///     
+        ///     
         /// </summary>
         /// <param name="memory"></param>
         /// <param name="index"></param>
         /// <returns></returns>
-        public bool ReserveAndRegisterMemory(out Memory<byte> memory)
+        public bool ReserveMemory(out Memory<byte> memory, bool sending = true)
         {
             if (freeFrom == 0)
             {
@@ -71,9 +70,17 @@ namespace FramedNetworkingSolution.Utils
                 return false;
             }
 
-            currentIndex = freeFrom;
+            currentSegmentNumber = freeFrom;
             var nextSegmentStart = (freeFrom - 1) * segmentSize;
-            memory = data.AsMemory(nextSegmentStart, segmentSize);
+
+            if (sending)
+            {
+                memory = data.AsMemory(nextSegmentStart + 2, segmentSize - 2);
+            }
+            else
+            {
+                memory = data.AsMemory(nextSegmentStart, segmentSize);
+            }
 
             if (freeFrom + 1 > segmentCount)
             {
@@ -101,19 +108,19 @@ namespace FramedNetworkingSolution.Utils
             return true;
         }
 
-        public void UnregisterMemory(int index)
+        public void ReleaseMemory(int segmentNumber)
         {
-            freeUpTo = index;
+            freeUpTo = segmentNumber;
 
             if (freeFrom == 0)
             {
-                freeFrom = index;
+                freeFrom = segmentNumber;
             }
         }
 
-        public Memory<byte> GetRegisteredMemory(int index, int length)
+        public Memory<byte> GetRegisteredMemory(int segmentNumber, int length)
         {
-            return data.AsMemory((index - 1) * segmentSize, length);
+            return data.AsMemory((segmentNumber - 1) * segmentSize, length + 2);
         }
     }
 }
