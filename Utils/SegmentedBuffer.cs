@@ -59,27 +59,32 @@ namespace FramedNetworkingSolution.Utils
         ///     
         ///     
         /// </summary>
-        /// <param name="memory"></param>
+        /// <param name="segment"></param>
         /// <param name="index"></param>
         /// <returns></returns>
-        public bool ReserveMemory(out Memory<byte> memory, bool sending = true)
+        public bool ReserveMemory(out Segment segment, bool sending = true)
         {
+            segment = new Segment();
+
             if (freeFrom == 0)
             {
-                memory = new Memory<byte>();
                 return false;
             }
 
             currentSegmentNumber = freeFrom;
             var nextSegmentStart = (freeFrom - 1) * segmentSize;
 
+            segment.SegmentIndex = freeFrom;
+            segment.ReleaseMemoryCallback = ReleaseMemory;
+
             if (sending)
             {
-                memory = data.AsMemory(nextSegmentStart + 2, segmentSize - 2);
+                segment.Memory = data.AsMemory(nextSegmentStart + 2, segmentSize - 2);
+                // segment.SendMemory = segment.Memory = data.AsMemory(nextSegmentStart, segmentSize);
             }
             else
             {
-                memory = data.AsMemory(nextSegmentStart, segmentSize);
+                segment.Memory = data.AsMemory(nextSegmentStart, segmentSize);
             }
 
             if (freeFrom + 1 > segmentCount)

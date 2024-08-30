@@ -56,7 +56,7 @@ namespace FramedNetworkingSolution.Transport
             receiveBuffer = new SegmentedBuffer(8192, 256);
 
             OnPacketSent += (object sender, SocketAsyncEventArgs onDisconnected) => { };
-            OnPacketReceived += (object sender, SocketAsyncEventArgs onDisconnected) => { };
+            // OnPacketReceived += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnAttemptConnectResult += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnDisconnected += (object sender, SocketAsyncEventArgs onDisconnected) => { };
 
@@ -81,7 +81,33 @@ namespace FramedNetworkingSolution.Transport
         /// <summary>
         ///     On Packet Received Event Handler.
         /// </summary>
-        public event EventHandler<SocketAsyncEventArgs> OnPacketReceived;
+        public Action<object, SocketAsyncEventArgs, Segment> OnPacketReceived { get; set; }
+
+        // /// <summary>
+        // ///     Start an Async Receive Operation to receive data from the client using the given buffer size.
+        // /// </summary>
+        // /// <param name="bufferSize">The Size of the Buffer to be Allocated for the Receiving of Data From Client.</param>
+        // public void ReceiveAsync(int bufferSize = 2)
+        // {
+        //     if (socket.Connected)
+        //     {
+        //         if (receiveBuffer.ReserveMemory(out Memory<byte> memory, false))
+        //         {
+        //             receiveEventArgs.SetBuffer(memory.Slice(0, bufferSize));
+
+        //             if (!socket.ReceiveAsync(receiveEventArgs))
+        //             {
+        //                 PacketReceived(socket, receiveEventArgs);
+        //             }
+
+        //             return;
+        //         }
+        //     }
+
+        //     Debug.WriteLine("Receive | Client Is Not Connected", "error");
+        // }
+
+        private Segment segment;
 
         /// <summary>
         ///     Start an Async Receive Operation to receive data from the client using the given buffer size.
@@ -91,9 +117,10 @@ namespace FramedNetworkingSolution.Transport
         {
             if (socket.Connected)
             {
-                if (receiveBuffer.ReserveMemory(out Memory<byte> memory, false))
+                if (receiveBuffer.ReserveMemory(out Segment newSegment, false))
                 {
-                    receiveEventArgs.SetBuffer(memory.Slice(0, bufferSize));
+                    segment = newSegment;
+                    receiveEventArgs.SetBuffer(newSegment.Memory.Slice(0, bufferSize));
 
                     if (!socket.ReceiveAsync(receiveEventArgs))
                     {
@@ -126,7 +153,8 @@ namespace FramedNetworkingSolution.Transport
                     return;
             }
 
-            OnPacketReceived(sender, onReceived);
+            // Segment segment = new 
+            OnPacketReceived(sender, onReceived, segment);
         }
 
         /// <summary>
