@@ -10,7 +10,7 @@ namespace FramedNetworkingSolution.SocketConnection
     public class ServerConnector : IServer
     {
         /// <summary>
-        /// Server Socket.
+        ///     The Server's Socket.
         /// </summary>
         private Socket socket;
 

@@ -9,24 +9,35 @@ namespace FramedNetworkingSolution.SocketConnection
     public class ClientConnector : IClient
     {
         /// <summary>
-        ///     The Session's Main Socket.
+        ///     The Client Socket.
         /// </summary>
         private readonly Socket socket;
 
         /// <summary>
-        ///     Event Arguments For Sending Operation.
+        ///     Socket Connection State This is the Same as the State Inside the Socket Itself.
+        /// </summary>
+        /// <value></value>
+        public bool IsConnected
+        {
+            get
+            {
+                return socket.Connected;
+            }
+        }
+
+        /// <summary>
+        ///     Event Arguments For Sending Operations.
         /// </summary>
         private readonly SocketAsyncEventArgs connectEventArgs;
 
         /// <summary>
-        ///     Event Arguments For Disconnecting Operation.
+        ///     Event Arguments For Disconnecting Operations.
         /// </summary>
         private readonly SocketAsyncEventArgs disconnectEventArgs;
 
         /// <summary>
-        ///     Server Session Constructor That Initializes the Socket From An Already Initialized Socket.
+        ///     Simple Construction Which Initializes the Socket and The Helper SocketAsyncEventArgs That's Needed.
         /// </summary>
-        /// <param name="socket">The Connected Socket</param>
         public ClientConnector()
         {
             socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -34,8 +45,8 @@ namespace FramedNetworkingSolution.SocketConnection
             connectEventArgs = new SocketAsyncEventArgs();
             disconnectEventArgs = new SocketAsyncEventArgs();
 
-            OnConnectedHandler += (object sender, Transport.Interface.ITransport transport) => { };
             OnDisconnectedHandler += (object sender, SocketAsyncEventArgs onDisconnected) => { };
+            OnAttemptConnectResponceHandler = (sender, state, connectedTransport) => { };
 
             connectEventArgs.Completed += OnAttemptConnectResponse;
             disconnectEventArgs.Completed += OnDisconnected;
@@ -45,7 +56,7 @@ namespace FramedNetworkingSolution.SocketConnection
         /// <summary>
         ///     On Packet Received Event Handler.
         /// </summary>
-        public event EventHandler<Transport.Interface.ITransport> OnConnectedHandler;
+        public Action<object, bool, Transport.Interface.ITransport?> OnAttemptConnectResponceHandler { get; }
 
         /// <summary>
         ///     On Packet Disconnect Event Handler.
@@ -76,11 +87,12 @@ namespace FramedNetworkingSolution.SocketConnection
         {
             if (connectEventArgs.SocketError == SocketError.Success)
             {
-                OnConnectedHandler(sender, new Transport.Transport(socket));
+                OnAttemptConnectResponceHandler(sender, true, new Transport.Transport(connectEventArgs.ConnectSocket));
             }
             else
             {
-                Debug.WriteLine("Session Try Reconnect Failed", "log");
+                OnAttemptConnectResponceHandler(sender, false, null);
+                Debug.WriteLine("Session Try Connect Failed", "log");
             }
         }
 

@@ -10,17 +10,17 @@ namespace FramedNetworkingSolution.Transport
     public class Transport : ITransport
     {
         /// <summary>
-        ///     The Session's Main Socket.
+        ///     The Transport's Socket.
         /// </summary>
         public Socket socket { get; set; }
 
         /// <summary>
-        ///     Initializes The Session Receive Buffer.
+        ///     SegmentedBuffer Instance Used For Receive Operations.
         /// </summary>
         public SegmentedBuffer receiveBuffer { get; set; }
 
         /// <summary>
-        ///     Initializes The Session Send Buffers.
+        ///     SegmentedBuffer Instance Used For Sending Operations.
         /// </summary>
         public SegmentedBuffer sendBuffer { get; set; }
 
@@ -35,19 +35,20 @@ namespace FramedNetworkingSolution.Transport
         private readonly SocketAsyncEventArgs receiveEventArgs;
 
         /// <summary>
-        ///     Event Arguments For Sending Operation.
+        ///     Event Arguments For The Connecting Operation.
         /// </summary>
         private readonly SocketAsyncEventArgs connectEventArgs;
 
         /// <summary>
-        ///     Event Arguments For Receiving Operation.
+        ///     Event Arguments For The Disconnecting Operation.
         /// </summary>
         private readonly SocketAsyncEventArgs disconnectEventArgs;
 
         /// <summary>
-        ///     
+        ///     Initializes The Transport Using a Socket.
+        ///     This Initializes All SocketAsyncEventArgs and SegmentedBuffer Needed For the Transport Operation.
         /// </summary>
-        /// <param name="socket"></param>
+        /// <param name="socket">Socket</param>
         public Transport(Socket socket)
         {
             this.socket = socket;
@@ -56,7 +57,7 @@ namespace FramedNetworkingSolution.Transport
             receiveBuffer = new SegmentedBuffer(8192, 256);
 
             OnPacketSent += (object sender, SocketAsyncEventArgs onDisconnected) => { };
-            // OnPacketReceived += (object sender, SocketAsyncEventArgs onDisconnected) => { };
+            OnPacketReceived = (sender, onDisconnected, segment) => { };
             OnAttemptConnectResult += (object sender, SocketAsyncEventArgs onDisconnected) => { };
             OnDisconnected += (object sender, SocketAsyncEventArgs onDisconnected) => { };
 
@@ -83,30 +84,6 @@ namespace FramedNetworkingSolution.Transport
         /// </summary>
         public Action<object, SocketAsyncEventArgs, Segment> OnPacketReceived { get; set; }
 
-        // /// <summary>
-        // ///     Start an Async Receive Operation to receive data from the client using the given buffer size.
-        // /// </summary>
-        // /// <param name="bufferSize">The Size of the Buffer to be Allocated for the Receiving of Data From Client.</param>
-        // public void ReceiveAsync(int bufferSize = 2)
-        // {
-        //     if (socket.Connected)
-        //     {
-        //         if (receiveBuffer.ReserveMemory(out Memory<byte> memory, false))
-        //         {
-        //             receiveEventArgs.SetBuffer(memory.Slice(0, bufferSize));
-
-        //             if (!socket.ReceiveAsync(receiveEventArgs))
-        //             {
-        //                 PacketReceived(socket, receiveEventArgs);
-        //             }
-
-        //             return;
-        //         }
-        //     }
-
-        //     Debug.WriteLine("Receive | Client Is Not Connected", "error");
-        // }
-
         private Segment segment;
 
         /// <summary>
@@ -117,10 +94,10 @@ namespace FramedNetworkingSolution.Transport
         {
             if (socket.Connected)
             {
-                if (receiveBuffer.ReserveMemory(out Segment newSegment, false))
+                if (receiveBuffer.ReserveMemory(out Segment newSegment, bufferSize))
                 {
                     segment = newSegment;
-                    receiveEventArgs.SetBuffer(newSegment.Memory.Slice(0, bufferSize));
+                    receiveEventArgs.SetBuffer(newSegment.Memory);
 
                     if (!socket.ReceiveAsync(receiveEventArgs))
                     {
@@ -130,8 +107,6 @@ namespace FramedNetworkingSolution.Transport
                     return;
                 }
             }
-
-            Debug.WriteLine("Receive | Client Is Not Connected", "error");
         }
 
         /// <summary>
@@ -145,21 +120,20 @@ namespace FramedNetworkingSolution.Transport
             {
                 case 0:
                     Debug.WriteLine("Received And Empty Packet", "log");
+                    DisconnectAsync();
                     return;
-                case 1:
-                    return;
+
                 case 2:
                     ReceiveAsync(BitConverter.ToUInt16(onReceived.MemoryBuffer.Span));
                     return;
             }
 
-            // Segment segment = new 
             OnPacketReceived(sender, onReceived, segment);
         }
 
         /// <summary>
         ///     Starts an Async Send Operation to send the provided packet to the client.
-        ///     The Function Adds the Length of the Packet To the Very Start of the Packet Before Sending It.
+        ///     The Function Adds the Length of the Packet To the First 2 bytes of the Packet Before Sending It.
         /// </summary>
         /// <param name="packet">A Memory Of a Byte Array Containing the Data Needed To Be Sent.</param>
         /// <param name="packetLength">The Length of the Packet That Needs to be Sent.</param>
@@ -228,7 +202,7 @@ namespace FramedNetworkingSolution.Transport
         /// </summary>
         public void DisconnectAsync()
         {
-            socket.Shutdown(SocketShutdown.Both); // Stops sending and receiving.  
+            socket.Shutdown(SocketShutdown.Both);
 
             if (!socket.DisconnectAsync(disconnectEventArgs))
             {

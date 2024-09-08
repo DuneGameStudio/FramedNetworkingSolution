@@ -6,7 +6,7 @@ namespace FramedNetworkingSolution.SocketConnection.Interface
 {
     public interface IClient : IDisposable
     {
-        public event EventHandler<ITransport> OnConnectedHandler;
+        public Action<object, bool, ITransport> OnAttemptConnectResponceHandler { get; }
         public event EventHandler<SocketAsyncEventArgs> OnDisconnectedHandler;
         public void AttemptConnectAsync(string address, int port);
         public void OnAttemptConnectResponse(object sender, SocketAsyncEventArgs tryConnectEventArgs);

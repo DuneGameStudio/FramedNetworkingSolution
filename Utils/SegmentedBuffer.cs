@@ -26,19 +26,14 @@ namespace FramedNetworkingSolution.Utils
         }
 
         /// <summary>
-        ///     
+        ///     Index Of Fist Free Segment.
         /// </summary>
         int freeFrom;
 
         /// <summary>
-        ///     Next Free Segmant Count.
+        ///     Index Of Last Free Segment.
         /// </summary>
         int freeUpTo;
-
-        /// <summary>
-        ///     
-        /// </summary>
-        public int currentSegmentNumber;
 
         /// <summary>
         ///     
@@ -54,15 +49,13 @@ namespace FramedNetworkingSolution.Utils
             freeFrom = 1;
             freeUpTo = segmentCount;
         }
-
         /// <summary>
-        ///     
-        ///     
+        ///     Creates and Reserves the Next Free Segment.
         /// </summary>
-        /// <param name="segment"></param>
-        /// <param name="index"></param>
-        /// <returns></returns>
-        public bool ReserveMemory(out Segment segment, bool sending = true)
+        /// <param name="segment">Segment Instance That Represents The Byte Range That is Reserved.</param>
+        /// <param name="size">Size Of The Byte Range Needed, If it's not Specified i.e. still 0 the function uses the SegmentSize</param>
+        /// <returns>true if the Reservation operation was Successful and false if it wasn't.</returns>
+        public bool ReserveMemory(out Segment segment, int size = 0)
         {
             segment = new Segment();
 
@@ -71,20 +64,18 @@ namespace FramedNetworkingSolution.Utils
                 return false;
             }
 
-            currentSegmentNumber = freeFrom;
             var nextSegmentStart = (freeFrom - 1) * segmentSize;
 
             segment.SegmentIndex = freeFrom;
             segment.ReleaseMemoryCallback = ReleaseMemory;
 
-            if (sending)
+            if (size == 0)
             {
                 segment.Memory = data.AsMemory(nextSegmentStart + 2, segmentSize - 2);
-                // segment.SendMemory = segment.Memory = data.AsMemory(nextSegmentStart, segmentSize);
             }
             else
             {
-                segment.Memory = data.AsMemory(nextSegmentStart, segmentSize);
+                segment.Memory = data.AsMemory(nextSegmentStart, size);
             }
 
             if (freeFrom + 1 > segmentCount)
@@ -113,6 +104,10 @@ namespace FramedNetworkingSolution.Utils
             return true;
         }
 
+        /// <summary>
+        ///     Releases the Segment.
+        /// </summary>
+        /// <param name="segmentNumber"></param>
         public void ReleaseMemory(int segmentNumber)
         {
             freeUpTo = segmentNumber;
@@ -123,6 +118,12 @@ namespace FramedNetworkingSolution.Utils
             }
         }
 
+        /// <summary>
+        ///     Gets the Segment Memory with the specified Length.
+        /// </summary>
+        /// <param name="segmentNumber">Segment index in the byte array</param>
+        /// <param name="length">length of the returned Memory</param>
+        /// <returns>Memory</returns>
         public Memory<byte> GetRegisteredMemory(int segmentNumber, int length)
         {
             return data.AsMemory((segmentNumber - 1) * segmentSize, length + 2);
