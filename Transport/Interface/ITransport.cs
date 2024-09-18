@@ -1,6 +1,6 @@
 using System;
 using System.Net.Sockets;
-using FramedNetworkingSolution.Utils;
+using FramedNetworkingSolution.ByteArrayManager;
 
 namespace FramedNetworkingSolution.Transport.Interface
 {

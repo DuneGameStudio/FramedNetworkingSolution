@@ -2,7 +2,7 @@ using System;
 using System.Net;
 using System.Diagnostics;
 using System.Net.Sockets;
-using FramedNetworkingSolution.Utils;
+using FramedNetworkingSolution.ByteArrayManager;
 using FramedNetworkingSolution.Transport.Interface;
 
 namespace FramedNetworkingSolution.Transport
@@ -23,6 +23,11 @@ namespace FramedNetworkingSolution.Transport
         ///     SegmentedBuffer Instance Used For Sending Operations.
         /// </summary>
         public SegmentedBuffer sendBuffer { get; set; }
+
+        /// <summary>
+        ///     The Segment Currently Used To Store The Latest Received Packet.
+        /// </summary>
+        private Segment currentReceiveingSegment;
 
         /// <summary>
         ///     Event Arguments For Sending Operation.
@@ -84,8 +89,6 @@ namespace FramedNetworkingSolution.Transport
         /// </summary>
         public Action<object, SocketAsyncEventArgs, Segment> OnPacketReceived { get; set; }
 
-        private Segment segment;
-
         /// <summary>
         ///     Start an Async Receive Operation to receive data from the client using the given buffer size.
         /// </summary>
@@ -96,7 +99,7 @@ namespace FramedNetworkingSolution.Transport
             {
                 if (receiveBuffer.ReserveMemory(out Segment newSegment, bufferSize))
                 {
-                    segment = newSegment;
+                    currentReceiveingSegment = newSegment;
                     receiveEventArgs.SetBuffer(newSegment.Memory);
 
                     if (!socket.ReceiveAsync(receiveEventArgs))
@@ -128,7 +131,7 @@ namespace FramedNetworkingSolution.Transport
                     return;
             }
 
-            OnPacketReceived(sender, onReceived, segment);
+            OnPacketReceived(sender, onReceived, currentReceiveingSegment);
         }
 
         /// <summary>

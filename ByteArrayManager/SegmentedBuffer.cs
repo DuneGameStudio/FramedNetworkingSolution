@@ -1,6 +1,6 @@
 using System;
 
-namespace FramedNetworkingSolution.Utils
+namespace FramedNetworkingSolution.ByteArrayManager
 {
     public class SegmentedBuffer
     {

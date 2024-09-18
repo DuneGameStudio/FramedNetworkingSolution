@@ -1,10 +1,16 @@
 using System.Diagnostics;
 using FramedNetworkingSolution.Transport.Interface;
 
-namespace FramedNetworkingSolution.Utils
+namespace FramedNetworkingSolution.ByteArrayManager
 {
     public interface SegmentManager
     {
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <value></value>
+        ushort Id { get; set; }
+
         /// <summary>
         ///     Segment Reference Produced Oreginally From a SegmentedBuffer Instance.
         /// </summary>
@@ -49,7 +55,7 @@ namespace FramedNetworkingSolution.Utils
 
                 segment = newSegment;
             };
-
+            
             OnSerialize();
         }
 
