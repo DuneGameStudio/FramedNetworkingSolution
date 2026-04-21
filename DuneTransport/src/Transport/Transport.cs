@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Net.Sockets;
+using System.Threading;
 using DuneTransport.BufferManager;
 using DuneTransport.Transport.Interface;
 
@@ -27,13 +28,18 @@ namespace DuneTransport.Transport
         private readonly SocketAsyncEventArgs sendEventArgs;
         private readonly SocketAsyncEventArgs receiveEventArgs;
 
-        public bool IsConnected { get; set; } = true;
+        private int _disposed;        // 0/1 via Interlocked.Exchange
+        private int _sendInFlight;    // 0/1 via Interlocked.CompareExchange
+        private int _receiveInFlight; // 0/1 via Interlocked.CompareExchange
 
-        public event EventHandler<SocketAsyncEventArgs>? OnPacketSent;
-        public event EventHandler<Segment>? OnPacketSendFailed;
+        public bool IsConnected { get; private set; } = true;
+        public bool IsDisposed => Volatile.Read(ref _disposed) == 1;
+
+        public event Action<ITransport>? OnPacketSent;
+        public event Action<ITransport, Segment, TransportError>? OnPacketSendFailed;
 
         public event Action<ITransport, SocketAsyncEventArgs, Segment>? OnPacketReceived;
-        public event Action<ITransport>? OnPacketReceiveFailed;
+        public event Action<ITransport, TransportError>? OnPacketReceiveFailed;
 
         public event Action? OnDisconnectRequested;
 
@@ -51,14 +57,32 @@ namespace DuneTransport.Transport
             receiveEventArgs.Completed += OnPacketReceivedEventHandler;
         }
 
+        private void ThrowIfDisposed()
+        {
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                throw new ObjectDisposedException(nameof(Transport));
+            }
+        }
+
         public void ReceiveAsync()
         {
-            if (!IsConnected) return;
+            ThrowIfDisposed();
+            
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Transport is not connected.");
+            }
+            if (Interlocked.CompareExchange(ref _receiveInFlight, 1, 0) != 0)
+            {
+                throw new InvalidOperationException("ReceiveAsync called while a previous receive is in flight.");
+            }
 
             if (!receiveBuffer.TryReserveSegment(out Segment newSegment))
             {
                 Debug.WriteLine("ReceiveAsync | Failed to reserve memory.", "error");
-                OnPacketReceiveFailed?.Invoke(this);
+                Interlocked.Exchange(ref _receiveInFlight, 0);
+                OnPacketReceiveFailed?.Invoke(this, TransportError.PoolExhausted);
                 return;
             }
 
@@ -77,85 +101,167 @@ namespace DuneTransport.Transport
 
             try
             {
-                if (!socket.ReceiveAsync(receiveEventArgs))
+                while (true)
                 {
-                    ProcessReceive(receiveEventArgs);
+                    bool pending;
+                    try
+                    {
+                        pending = socket.ReceiveAsync(receiveEventArgs);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        Debug.WriteLine("IssueReceive | ObjectDisposedException", "error");
+                        currentReceivingSegment.Release();
+                        Interlocked.Exchange(ref _receiveInFlight, 0);
+                        OnPacketReceiveFailed?.Invoke(this, TransportError.SocketError);
+                        return;
+                    }
+                    catch (SocketException ex)
+                    {
+                        Debug.WriteLine($"IssueReceive | SocketException: {ex.Message}", "error");
+                        currentReceivingSegment.Release();
+                        IsConnected = false;
+                        Interlocked.Exchange(ref _receiveInFlight, 0);
+                        OnPacketReceiveFailed?.Invoke(this, TransportError.SocketError);
+                        return;
+                    }
+
+                    if (pending) return;
+
+                    if (!ProcessReceive(receiveEventArgs)) return;
+
+                    receiveEventArgs.SetBuffer(
+                        currentReceivingSegment.Memory.Slice(receivedBytes, expectedBytes - receivedBytes));
                 }
             }
-            catch (ObjectDisposedException)
+            catch
             {
-                Debug.WriteLine("ObjectDisposedException");
-                OnPacketReceiveFailed?.Invoke(this);
-            }
-            catch (SocketException ex)
-            {
-                Debug.WriteLine($"IssueReceive | SocketException: {ex.Message}", "error");
-                OnPacketReceiveFailed?.Invoke(this);
+                // Defensive: an unexpected throw from the loop must not leak the segment.
+                currentReceivingSegment.Release();
+                Interlocked.Exchange(ref _receiveInFlight, 0);
+                throw;
             }
         }
 
         private void OnPacketReceivedEventHandler(object? sender, SocketAsyncEventArgs e)
         {
-            ProcessReceive(e);
+            if (ProcessReceive(e))
+            {
+                IssueReceive();
+            }
         }
 
-        private void ProcessReceive(SocketAsyncEventArgs onReceived)
+        private bool ProcessReceive(SocketAsyncEventArgs onReceived)
         {
-            if (onReceived.SocketError != SocketError.Success)
+            // Dispose raced with this callback. Release and exit silently.
+            if (Volatile.Read(ref _disposed) == 1)
             {
-                OnPacketReceiveFailed?.Invoke(this);
-                return;
+                currentReceivingSegment.Release();
+                Interlocked.Exchange(ref _receiveInFlight, 0);
+                return false;
             }
 
+            // Socket-level error → release, bubble, stop.
+            if (onReceived.SocketError != SocketError.Success)
+            {
+                currentReceivingSegment.Release();
+                IsConnected = false;
+                Interlocked.Exchange(ref _receiveInFlight, 0);
+                OnPacketReceiveFailed?.Invoke(this, TransportError.SocketError);
+                return false;
+            }
+
+            // Graceful close (FIN) — regardless of current phase.
             if (onReceived.BytesTransferred == 0)
             {
+                currentReceivingSegment.Release();
+                IsConnected = false;
+                Interlocked.Exchange(ref _receiveInFlight, 0);
                 OnDisconnectRequested?.Invoke();
-                return;
+                return false;
             }
 
             receivedBytes += onReceived.BytesTransferred;
 
+            // Partial phase — keep reassembling with the same segment.
             if (receivedBytes < expectedBytes)
             {
-                IssueReceive();
-                return;
+                return true;
             }
 
             if (phase == ReceivePhase.Header)
             {
                 ushort payloadLength = BitConverter.ToUInt16(currentReceivingSegment.Memory.Span);
+
+                // Done with the header segment regardless of the next branch.
                 currentReceivingSegment.Release();
 
+                // Protocol violation: zero-length payload.
                 if (payloadLength == 0)
                 {
                     Debug.WriteLine("ProcessReceive | Zero-length payload rejected.", "error");
-                    OnPacketReceiveFailed?.Invoke(this);
-                    return;
+                    Interlocked.Exchange(ref _receiveInFlight, 0);
+                    OnPacketReceiveFailed?.Invoke(this, TransportError.ProtocolError);
+                    OnDisconnectRequested?.Invoke();
+                    return false;
                 }
 
+                // Protocol violation: payload larger than a segment.
+                if (payloadLength > receiveBuffer.SegmentSize)
+                {
+                    Debug.WriteLine($"ProcessReceive | Oversized payload ({payloadLength} > {receiveBuffer.SegmentSize}) rejected.", "error");
+                    Interlocked.Exchange(ref _receiveInFlight, 0);
+                    OnPacketReceiveFailed?.Invoke(this, TransportError.ProtocolError);
+                    OnDisconnectRequested?.Invoke();
+                    return false;
+                }
+
+                // Reserve payload segment.
                 if (!receiveBuffer.TryReserveSegment(out Segment payloadSegment))
                 {
                     Debug.WriteLine("ProcessReceive | Failed to reserve payload segment.", "error");
-                    OnPacketReceiveFailed?.Invoke(this);
-                    return;
+                    Interlocked.Exchange(ref _receiveInFlight, 0);
+                    OnPacketReceiveFailed?.Invoke(this, TransportError.PoolExhausted);
+                    return false;
                 }
 
                 currentReceivingSegment = payloadSegment;
                 phase = ReceivePhase.Payload;
                 expectedBytes = payloadLength;
                 receivedBytes = 0;
+                return true;
+            }
 
-                IssueReceive();
-            }
-            else
+            // Payload complete. Slice to actual payload length.
+            currentReceivingSegment.Memory = currentReceivingSegment.Memory.Slice(0, expectedBytes);
+
+            // Clear flag BEFORE invoke so the subscriber can call ReceiveAsync from the handler.
+            Interlocked.Exchange(ref _receiveInFlight, 0);
+
+            // Hand off ownership. Capture locally and clear the field so a
+            // racing Dispose doesn't double-release what the subscriber now owns.
+            var segmentToDeliver = currentReceivingSegment;
+            currentReceivingSegment = default;
+
+            try
             {
-                currentReceivingSegment.Memory = currentReceivingSegment.Memory.Slice(0, expectedBytes);
-                OnPacketReceived?.Invoke(this, onReceived, currentReceivingSegment);
+                OnPacketReceived?.Invoke(this, onReceived, segmentToDeliver);
             }
+            catch
+            {
+                // Handler bug — make sure the segment goes back to the pool.
+                // Release is idempotent (Task 2), so it is safe even if the
+                // handler released before throwing.
+                segmentToDeliver.Release();
+                OnPacketReceiveFailed?.Invoke(this, TransportError.HandlerFailed);
+            }
+
+            return false;
         }
 
         public bool TryReserveSendPacket(out Segment segment)
         {
+            ThrowIfDisposed();
             if (!sendBuffer.TryReserveSegment(out segment))
                 return false;
 
@@ -165,25 +271,40 @@ namespace DuneTransport.Transport
 
         public void SendAsync(Segment packet, int packetSize)
         {
+            ThrowIfDisposed();
+
             if (!IsConnected)
             {
-                Debug.WriteLine("SendAsync | Cannot send, pipeline is disconnected.", "error");
-                return;
+                packet.Release();
+                throw new InvalidOperationException("Transport is not connected.");
+            }
+
+            if (Interlocked.CompareExchange(ref _sendInFlight, 1, 0) != 0)
+            {
+                throw new InvalidOperationException("SendAsync called while a previous send is in flight.");
             }
 
             if (!sendBuffer.GetRegisteredMemory(packet.SegmentIndex, packetSize + HeaderSize, out Memory<byte> memory))
             {
-                OnPacketSendFailed?.Invoke(this, currentSendingSegment);
+                Interlocked.Exchange(ref _sendInFlight, 0);
+                packet.Release();
+                OnPacketSendFailed?.Invoke(this, packet, TransportError.InvalidSegment);
                 return;
             }
 
-            BitConverter.TryWriteBytes(memory.Span, (ushort)packetSize);
+            if (!BitConverter.TryWriteBytes(memory.Span.Slice(0, HeaderSize), (ushort)packetSize))
+            {
+                Interlocked.Exchange(ref _sendInFlight, 0);
+                packet.Release();
+                OnPacketSendFailed?.Invoke(this, packet, TransportError.InvalidSegment);
+                return;
+            }
 
-            sendEventArgs.SetBuffer(memory);
+            currentSendingSegment = packet;
 
             try
             {
-                currentSendingSegment = packet;
+                sendEventArgs.SetBuffer(memory);
                 if (!socket.SendAsync(sendEventArgs))
                 {
                     ProcessSend(sendEventArgs);
@@ -191,13 +312,22 @@ namespace DuneTransport.Transport
             }
             catch (ObjectDisposedException)
             {
-                Debug.WriteLine("ObjectDisposedException");
-                OnPacketSendFailed?.Invoke(this, currentSendingSegment);
+                Debug.WriteLine("SendAsync | ObjectDisposedException", "error");
+                var failed = currentSendingSegment;
+                currentSendingSegment = default;
+                failed.Release();
+                Interlocked.Exchange(ref _sendInFlight, 0);
+                OnPacketSendFailed?.Invoke(this, failed, TransportError.SocketError);
             }
             catch (SocketException ex)
             {
                 Debug.WriteLine($"SendAsync | SocketException: {ex.Message}", "error");
-                OnPacketSendFailed?.Invoke(this, currentSendingSegment);
+                var failed = currentSendingSegment;
+                currentSendingSegment = default;
+                failed.Release();
+                IsConnected = false;
+                Interlocked.Exchange(ref _sendInFlight, 0);
+                OnPacketSendFailed?.Invoke(this, failed, TransportError.SocketError);
             }
         }
 
@@ -208,44 +338,75 @@ namespace DuneTransport.Transport
 
         private void ProcessSend(SocketAsyncEventArgs onSent)
         {
-            if (onSent.SocketError != SocketError.Success)
+            // Dispose raced with this callback. Release and exit silently.
+            if (Volatile.Read(ref _disposed) == 1)
             {
-                OnPacketSendFailed?.Invoke(this, currentSendingSegment);
+                var seg = currentSendingSegment;
+                currentSendingSegment = default;
+                seg.Release();
+                Interlocked.Exchange(ref _sendInFlight, 0);
                 return;
             }
 
-            currentSendingSegment.Release();
-            OnPacketSent?.Invoke(this, onSent);
-        }
-
-        #region IDisposable
-
-        private bool disposedValue;
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (!disposedValue)
+            if (onSent.SocketError != SocketError.Success)
             {
-                if (disposing)
-                {
-                    sendEventArgs.Completed -= OnPacketSentEventHandler;
-                    receiveEventArgs.Completed -= OnPacketReceivedEventHandler;
-                    
-                    sendEventArgs.Dispose();
-                    receiveEventArgs.Dispose();
-                    
-                    socket.Dispose();
-                }
-                disposedValue = true;
+                var seg = currentSendingSegment;
+                currentSendingSegment = default;
+                seg.Release();
+                IsConnected = false;
+                Interlocked.Exchange(ref _sendInFlight, 0);
+                OnPacketSendFailed?.Invoke(this, seg, TransportError.SocketError);
+                return;
             }
+
+            var sentSeg = currentSendingSegment;
+            currentSendingSegment = default;
+            sentSeg.Release();
+            Interlocked.Exchange(ref _sendInFlight, 0);
+            OnPacketSent?.Invoke(this);
         }
 
         public void Dispose()
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
+            if (Interlocked.Exchange(ref _disposed, 1) == 1)
+            {
+                return;
+            }
 
-        #endregion
+            // Best-effort signal to the peer and to the OS so in-flight I/O
+            // completes with an error. Callbacks that land after this point
+            // see _disposed == 1 and take the release-and-exit branch.
+            try { socket.Shutdown(SocketShutdown.Both); } catch { }
+            try { socket.Close(); } catch { }
+
+            // Sweep any segment still rented at dispose time. ReleaseMemory is
+            // idempotent (see SegmentedBuffer), so a racing callback that
+            // releases first is safe.
+            if (Interlocked.Exchange(ref _receiveInFlight, 0) == 1)
+            {
+                var seg = currentReceivingSegment;
+                currentReceivingSegment = default;
+                seg.Release();
+            }
+            if (Interlocked.Exchange(ref _sendInFlight, 0) == 1)
+            {
+                var seg = currentSendingSegment;
+                currentSendingSegment = default;
+                seg.Release();
+            }
+
+            try
+            {
+                sendEventArgs.Completed -= OnPacketSentEventHandler;
+                receiveEventArgs.Completed -= OnPacketReceivedEventHandler;
+                sendEventArgs.Dispose();
+                receiveEventArgs.Dispose();
+            }
+            catch { }
+
+            try { socket.Dispose(); } catch { }
+
+            IsConnected = false;
+        }
     }
 }

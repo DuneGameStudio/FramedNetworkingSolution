@@ -56,8 +56,6 @@ namespace DuneSession.SocketConnectors
             if (Interlocked.Exchange(ref connectedState, 0) != 1)
                 return;
 
-            Transport.IsConnected = false;
-            
             socket.Close();
             OnDisconnected?.Invoke();
         }

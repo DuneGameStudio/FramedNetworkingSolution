@@ -7,6 +7,7 @@ using DunePresentation.Packet.Interfaces;
 using DunePresentation.Peer.Interfaces;
 using DuneSession.SocketConnectors.Interface;
 using DuneTransport.BufferManager;
+using DuneTransport.Transport;
 using DuneTransport.Transport.Interface;
 
 namespace DunePresentation.Peer
@@ -102,9 +103,9 @@ namespace DunePresentation.Peer
             }
         }
 
-        private void OnPacketReceiveFailedHandler(ITransport transport)
+        private void OnPacketReceiveFailedHandler(ITransport transport, TransportError reason)
         {
-            Debug.WriteLine("Peer.OnPacketReceiveFailedHandler | Receive failed, disconnecting.", "error");
+            Debug.WriteLine($"Peer.OnPacketReceiveFailedHandler | Receive failed ({reason}), disconnecting.", "error");
             _connection.DisconnectAsync();
         }
 

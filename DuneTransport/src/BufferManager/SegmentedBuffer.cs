@@ -7,6 +7,12 @@ namespace DuneTransport.BufferManager
     {
         readonly byte[] data;
 
+        public int SegmentSize => segmentSize;
+
+        public int SegmentCount => segmentCount;
+
+        public int FreeCount => freeSegments.Count;
+
         readonly int segmentSize;
 
         readonly int segmentCount;
@@ -47,8 +53,15 @@ namespace DuneTransport.BufferManager
 
         public void ReleaseMemory(int segmentNumber)
         {
+            if (segmentNumber < 1 || segmentNumber > segmentCount)
+                throw new ArgumentOutOfRangeException(nameof(segmentNumber));
+
             if (!isAllocated[segmentNumber])
-                throw new InvalidOperationException($"Segment {segmentNumber} is not allocated.");
+            {
+                // Idempotent: already free. Transport relies on this for
+                // handler-throw and dispose-race cleanup paths.
+                return;
+            }
 
             isAllocated[segmentNumber] = false;
             freeSegments.Enqueue(segmentNumber);

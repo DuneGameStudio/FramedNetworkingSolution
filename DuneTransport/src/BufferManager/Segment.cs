@@ -12,7 +12,7 @@ namespace DuneTransport.BufferManager
 
         public void Release()
         {
-            ReleaseMemoryCallback(SegmentIndex);
+            ReleaseMemoryCallback?.Invoke(SegmentIndex);
         }
     }
 }
