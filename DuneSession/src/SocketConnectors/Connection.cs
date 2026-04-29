@@ -70,6 +70,7 @@ namespace DuneSession.SocketConnectors
             {
                 if (disposing)
                 {
+                    Transport.Dispose();
                     Transport.OnDisconnectRequested -= HandleDisconnectRequested;
                     disconnectAsyncSocketAsyncEventArgs.Completed -= OnDisconnect;
                     

@@ -5,7 +5,7 @@ namespace DunePresentation.Peer.Interfaces
 {
     public interface IPeer : IDisposable
     {
-        event Action? OnDisconnected; 
+        event Action? OnDisconnected;
         
         bool IsConnected { get; }
 

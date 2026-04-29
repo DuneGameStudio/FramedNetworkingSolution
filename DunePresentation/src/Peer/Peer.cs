@@ -62,16 +62,12 @@ namespace DunePresentation.Peer
             _connection.DisconnectAsync();
         }
 
-        private void OnPacketReceivedHandler(ITransport transport, SocketAsyncEventArgs args,
-                                             Segment segment)
+        private void OnPacketReceivedHandler(ITransport transport, SocketAsyncEventArgs args, Segment segment)
         {
             bool segmentOwned = true;
             try
             {
                 var span = segment.Memory.Span;
-
-                if (span.Length < PresentationHeader.Size)
-                    return;
 
                 if (_encryptor != null)
                     _encryptor.Decrypt(span, span);

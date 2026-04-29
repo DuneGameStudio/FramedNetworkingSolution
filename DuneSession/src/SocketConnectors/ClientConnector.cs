@@ -91,7 +91,7 @@ namespace DuneSession.SocketConnectors
                     
                     connectEventArgs.Dispose();
                     connection?.Dispose();
-                    socket?.Dispose();
+                    socket = null;
                 }
                 disposedValue = true;
             }

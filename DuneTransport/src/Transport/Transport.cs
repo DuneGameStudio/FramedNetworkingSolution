@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Threading;
@@ -11,6 +12,8 @@ namespace DuneTransport.Transport
     {
         private const int HeaderSize = 2;
 
+        // Borrowed reference — Connection owns the socket lifecycle.
+        // Transport must never close, shutdown, or dispose this socket.
         private readonly Socket socket;
 
         public SegmentedBuffer receiveBuffer { get; }
@@ -80,7 +83,6 @@ namespace DuneTransport.Transport
 
             if (!receiveBuffer.TryReserveSegment(out Segment newSegment))
             {
-                Debug.WriteLine("ReceiveAsync | Failed to reserve memory.", "error");
                 Interlocked.Exchange(ref _receiveInFlight, 0);
                 OnPacketReceiveFailed?.Invoke(this, TransportError.PoolExhausted);
                 return;
@@ -191,7 +193,7 @@ namespace DuneTransport.Transport
 
             if (phase == ReceivePhase.Header)
             {
-                ushort payloadLength = BitConverter.ToUInt16(currentReceivingSegment.Memory.Span);
+                ushort payloadLength = BinaryPrimitives.ReadUInt16LittleEndian(currentReceivingSegment.Memory.Span);
 
                 // Done with the header segment regardless of the next branch.
                 currentReceivingSegment.Release();
@@ -292,13 +294,7 @@ namespace DuneTransport.Transport
                 return;
             }
 
-            if (!BitConverter.TryWriteBytes(memory.Span.Slice(0, HeaderSize), (ushort)packetSize))
-            {
-                Interlocked.Exchange(ref _sendInFlight, 0);
-                packet.Release();
-                OnPacketSendFailed?.Invoke(this, packet, TransportError.InvalidSegment);
-                return;
-            }
+            BinaryPrimitives.WriteUInt16LittleEndian(memory.Span.Slice(0, HeaderSize), (ushort)packetSize);
 
             currentSendingSegment = packet;
 
@@ -372,13 +368,6 @@ namespace DuneTransport.Transport
             {
                 return;
             }
-
-            // Best-effort signal to the peer and to the OS so in-flight I/O
-            // completes with an error. Callbacks that land after this point
-            // see _disposed == 1 and take the release-and-exit branch.
-            try { socket.Shutdown(SocketShutdown.Both); } catch { }
-            try { socket.Close(); } catch { }
-
             // Sweep any segment still rented at dispose time. ReleaseMemory is
             // idempotent (see SegmentedBuffer), so a racing callback that
             // releases first is safe.
@@ -403,8 +392,6 @@ namespace DuneTransport.Transport
                 receiveEventArgs.Dispose();
             }
             catch { }
-
-            try { socket.Dispose(); } catch { }
 
             IsConnected = false;
         }
