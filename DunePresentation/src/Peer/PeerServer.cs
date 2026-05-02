@@ -22,12 +22,12 @@ namespace DunePresentation.Peer
         public event Action<IPeer>? OnPeerConnected;
         public event Action<SocketError>? OnAcceptFailed;
 
-        public PeerServer(PacketRegistry registry, Func<IPacketEncryptor>? encryptorFactory = null)
+        public PeerServer(PacketRegistry registry, Func<IPacketEncryptor>? encryptorFactory = null, IServer? server = null)
         {
             _registry = registry ?? throw new ArgumentNullException(nameof(registry));
             _encryptorFactory = encryptorFactory;
 
-            _server = new ServerConnector();
+            _server = server ?? new ServerConnector();
             _server.OnClientConnected += HandleClientConnected;
             _server.OnAcceptFailed += HandleAcceptFailed;
         }

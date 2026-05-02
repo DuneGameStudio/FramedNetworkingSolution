@@ -117,20 +117,19 @@ namespace DuneSession.SocketConnectors
 
         #region IDisposable
 
-        private bool disposedValue;
+        private int _disposed;
 
         protected virtual void Dispose(bool disposing)
         {
-            if (!disposedValue)
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
             {
                 if (disposing)
                 {
                     acceptEventArgs.Completed -= OnAcceptCompleted;
-                    
+
                     socket.Dispose();
                     acceptEventArgs.Dispose();
                 }
-                disposedValue = true;
             }
         }
 

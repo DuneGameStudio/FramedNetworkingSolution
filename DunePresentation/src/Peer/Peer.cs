@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Net.Sockets;
+using System.Threading;
 using DunePresentation.Encryption.Interface;
 using DunePresentation.Packet;
 using DunePresentation.Packet.Interfaces;
@@ -21,6 +22,7 @@ namespace DunePresentation.Peer
         public bool IsConnected => _connection.IsConnected;
 
         public event Action? OnDisconnected;
+        public event Action<TransportError>? OnPacketReceivedHandlerFailed;
 
         public Peer(IConnection connection, PacketRegistry registry, IPacketEncryptor? encryptor = null)
         {
@@ -75,7 +77,10 @@ namespace DunePresentation.Peer
                 PresentationHeader.Read(span, out ushort packetId);
 
                 if (!_registry.TryGetEntry(packetId, out Entry entry))
+                {
+                    OnPacketReceivedHandlerFailed?.Invoke(TransportError.RegistryError);
                     return;
+                }
 
                 IPacket packet = entry.Factory();
                 packet.segment = segment;
@@ -83,13 +88,17 @@ namespace DunePresentation.Peer
 
                 segmentOwned = false;
                 if (!packet.Deserialize())
+                {
+                    OnPacketReceivedHandlerFailed?.Invoke(TransportError.RegistryError);
                     return;
+                }
 
                 entry.Invoke(packet);
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Peer.OnPacketReceivedHandler | Exception:\n{ex}", "error");
+                OnPacketReceivedHandlerFailed?.Invoke(TransportError.HandlerFailed);
             }
             finally
             {
@@ -112,11 +121,11 @@ namespace DunePresentation.Peer
 
         #region IDisposable
 
-        private bool _disposed;
+        private int _disposed;
 
         protected virtual void Dispose(bool disposing)
         {
-            if (!_disposed)
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
             {
                 if (disposing)
                 {
@@ -124,8 +133,6 @@ namespace DunePresentation.Peer
                     _connection.Transport.OnPacketReceiveFailed -= OnPacketReceiveFailedHandler;
                     _connection.OnDisconnected -= OnDisconnectedHandler;
                 }
-
-                _disposed = true;
             }
         }
 

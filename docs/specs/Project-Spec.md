@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Build solution:** `dotnet build DuneNetworking.slnx` (uses the preview `.slnx` format; requires the SDK pinned in `global.json`, currently 10.0.0 with `rollForward: latestMajor`).
 - **Format:** `dotnet format DuneNetworking.slnx`.
 - **Target framework:** The three library projects target `netstandard2.1` with `Nullable` enabled — the library is consumed as a Unity package (`package.json` → `com.dunestudio.networking`, Unity 6000.0). Do not add APIs unavailable on netstandard2.1.
-- **Regression harness:** `samples/HardeningValidation/` is a standalone `net10.0` console app that exercises transport safety scenarios against a loopback socket (oversized frame rejection, zero-length frame rejection, FIN mid-header, handler-throw leak check, dispose-during-receive, double-dispose, send-on-disconnected release). It is **not** listed in `DuneNetworking.slnx` — run it directly with `dotnet run --project samples/HardeningValidation`.
-- **Tests:** No xUnit/NUnit project exists; do not assume a `dotnet test` workflow. The HardeningValidation sample is the closest thing to a test suite.
+- **Regression harness:** `Tests/` is a standalone `net10.0` console app (`Tests.csproj`) that exercises transport safety scenarios against a loopback socket (oversized frame rejection, zero-length frame rejection, FIN mid-header, handler-throw leak check, dispose-during-receive, double-dispose, send-on-disconnected release). Run it directly with `dotnet run --project Tests/Tests.csproj`.
+- **Tests:** No xUnit/NUnit project exists; the `Tests/` console app is the closest thing to a test suite.
 - **Maturity:** Early development (v0.0.1). Missing features, polish, and safeguards are expected — do not treat absence alone as a bug. Only treat something as a bug when it is explicitly called out as one (see *Known issues* below, or told so by the user).
 
 ## Library shape and threading model
@@ -15,7 +15,7 @@ This is a library meant to be embedded in games and similar applications. The ho
 
 - **No internal loops.** The only self-driven loop is the receive re-arm in `Transport` — after each completed receive, the pipeline re-arms itself so stream fragmentation across multiple socket reads can be reassembled into a framed packet without the caller having to poll.
 - **Single-flight per connection, enforced.** `Transport` guards `SendAsync` and `ReceiveAsync` with CAS flags (`_sendInFlight`, `_receiveInFlight`). Reentrance throws `InvalidOperationException` rather than corrupting state. The higher layers are still expected to serialize their own calls, but the transport fails loudly when that contract is broken.
-- **Errors bubble with a reason.** Transport failures surface via `OnPacketSendFailed(ITransport, Segment, TransportError)` and `OnPacketReceiveFailed(ITransport, TransportError)`. The `TransportError` enum carries the reason: `SocketError`, `PoolExhausted`, `ProtocolError`, `InvalidSegment`, `HandlerFailed`, `ObjectDisposed`. The session layer decides which ones imply disconnect and bubbles the rest to presentation / application.
+- **Errors bubble with a reason.** Transport failures surface via `OnPacketSendFailed(ITransport, Segment, TransportError)` and `OnPacketReceiveFailed(ITransport, TransportError)`. The `TransportError` enum carries the reason: `SocketError`, `PoolExhausted`, `ProtocolError`, `InvalidSegment`, `HandlerFailed`, `ObjectDisposed`, `RegistryError`. The session layer decides which ones imply disconnect and bubbles the rest to presentation / application.
 
 ### Public API surface (what applications are expected to use)
 
@@ -76,7 +76,7 @@ Responsible for `IPacket` management, encryption, and (planned) the request/resp
 1. `Transport` completes a receive, reassembles header + payload into a `Segment`, and raises `OnPacketReceived(this, args, segment)`. The `_receiveInFlight` flag is cleared **before** the invocation so the subscriber may call `ReceiveAsync()` from the handler; the delivered segment is captured locally and the field cleared so a racing `Dispose` cannot double-release it.
 2. `Peer` handler: optional decrypt → read `PresentationHeader` → `PacketRegistry.TryGetEntry`.
 3. Factory produces an `IPacket`, the segment is assigned into it, ownership flips (`segmentOwned = false`), `Deserialize()` runs user `ReadFieldsFromBuffer` and then releases the segment back to the pool.
-4. User handler is invoked synchronously on the receive callback thread. `transport.ReceiveAsync()` is re-armed in `finally`. If the subscriber throws, `Transport` releases the segment (idempotent) and raises `OnPacketReceiveFailed(HandlerFailed)`.
+4. User handler is invoked synchronously on the receive callback thread. `transport.ReceiveAsync()` is re-armed in `finally`. If the subscriber throws, `Peer` releases the segment (idempotent) and emits `OnPacketReceivedHandlerFailed(TransportError.HandlerFailed)` — the connection remains alive. The application decides whether to disconnect.
 
 The invariant: a `Segment` has exactly one owner at any time. If you add code paths in Peer / Transport, preserve the `segmentOwned` handoff pattern — dropping it causes either double-free or pool leaks (release is idempotent, but leaks are not detected).
 
@@ -86,8 +86,4 @@ These are the **confirmed** open bugs — existing patterns around them should b
 
 - Potential `Segment` leak in certain `ISegmentManager` serialization failure paths (specifically: `Serialize` releases on `OnSerialize == false`, but other failure modes in user-supplied `afterSerialize` callbacks are not covered).
 - `ServerConnector.StartListening` uses `(int)SocketOptionName.MaxConnections` as the listen backlog, which resolves to 5 — far too low for game networking. Should be a configurable value (e.g. 100+).
-- `Peer.OnPacketReceivedHandler` catches all exceptions from user handlers, logs via `Debug.WriteLine` (stripped in Release), and re-arms receive. This means:
-  - Handler exceptions are silently swallowed in Release builds.
-  - `Transport.OnPacketReceiveFailed(HandlerFailed)` never fires for Peer-level exceptions (Peer intercepts them before Transport sees the throw).
-  - The spec's documented data flow says "If the subscriber throws, Transport releases the segment (idempotent) and raises OnPacketReceiveFailed(HandlerFailed)" — but the actual flow contradicts this.
-- Undersized packets (`span.Length < PresentationHeader.Size`) and unknown packet IDs are silently discarded by `Peer.OnPacketReceivedHandler` without raising `OnPacketReceiveFailed` or calling `DisconnectAsync()`. These are protocol violations that should be surfaced.
+- Undersized packets (`span.Length < PresentationHeader.Size`) and unknown packet IDs are **not** silently discarded — `Peer.OnPacketReceivedHandler` catches the resulting exceptions and raises `OnPacketReceivedHandlerFailed` (with `TransportError.HandlerFailed` for undersized frames, `TransportError.RegistryError` for unknown IDs). The connection remains alive; the application decides whether to disconnect.
