@@ -12,8 +12,6 @@ namespace DuneTransport.Transport
     {
         private const int HeaderSize = 2;
 
-        // Borrowed reference — Connection owns the socket lifecycle.
-        // Transport must never close, shutdown, or dispose this socket.
         private readonly Socket socket;
 
         public SegmentedBuffer receiveBuffer { get; }
@@ -52,7 +50,7 @@ namespace DuneTransport.Transport
 
             sendBuffer = new SegmentedBuffer();
             receiveBuffer = new SegmentedBuffer();
-            
+
             sendEventArgs = new SocketAsyncEventArgs();
             receiveEventArgs = new SocketAsyncEventArgs();
 
@@ -71,7 +69,7 @@ namespace DuneTransport.Transport
         public void ReceiveAsync()
         {
             ThrowIfDisposed();
-            
+
             if (!IsConnected)
             {
                 throw new InvalidOperationException("Transport is not connected.");
@@ -278,7 +276,9 @@ namespace DuneTransport.Transport
             if (!IsConnected)
             {
                 packet.Release();
-                throw new InvalidOperationException("Transport is not connected.");
+                // throw new InvalidOperationException("Transport is not connected.");
+                OnPacketSendFailed?.Invoke(this, packet, TransportError.SocketDisconnected);
+                return;
             }
 
             if (Interlocked.CompareExchange(ref _sendInFlight, 1, 0) != 0)

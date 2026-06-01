@@ -24,6 +24,12 @@ namespace DuneTransport.Transport
         ObjectDisposed,
 
         /// <summary>The packet registry failed to resolve the requested packet ID or encountered an internal error.</summary>
-        RegistryError
+        RegistryError,
+
+        /// <summary>Failed to Serialize/Deserialize the packet.</summary>
+        SerializationError,
+
+        /// <summary>The socket was disconnected.</summary>
+        SocketDisconnected
     }
 }

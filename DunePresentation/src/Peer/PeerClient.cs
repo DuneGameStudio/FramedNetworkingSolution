@@ -39,7 +39,7 @@ namespace DunePresentation.Peer
         {
             IPacketEncryptor? encryptor = _encryptorFactory?.Invoke();
             var peer = new Peer(connection, _registry, encryptor);
-            peer.StartReceiving();
+            peer.Receive();
             OnPeerConnected?.Invoke(peer);
         }
 

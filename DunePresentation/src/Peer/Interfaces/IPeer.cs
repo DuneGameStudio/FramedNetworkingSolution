@@ -8,13 +8,19 @@ namespace DunePresentation.Peer.Interfaces
     {
         event Action? OnDisconnected;
 
-        event Action<TransportError>? OnPacketReceivedHandlerFailed;
+        event Action<TransportError>? OnHandlingPacketReceiveFailed;
+
+        event Action<TransportError>? OnPacketReceiveFailed;
+
+        event Action<TransportError>? OnHandlingPacketSendFailed;
+
+        event Action<TransportError>? OnPacketSendFailed;
 
         bool IsConnected { get; }
 
-        void StartReceiving();
+        void Receive();
 
-        bool Send<T>(T packet) where T : IPacket;
+        void Send<T>(T packet) where T : IPacket;
 
         void Disconnect();
     }

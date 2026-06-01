@@ -13,11 +13,6 @@ namespace DuneTransport.BufferManager.Interface
 
         bool OnDeserialize();
 
-        void OnSend(ITransport transport)
-        {
-            transport.SendAsync(segment, PacketSize);
-        }
-
         bool Serialize(ITransport transport, Action<Segment, int>? afterSerialize = null)
         {
             if (!transport.TryReserveSendPacket(out Segment newSegment))

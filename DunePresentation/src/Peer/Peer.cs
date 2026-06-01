@@ -22,7 +22,15 @@ namespace DunePresentation.Peer
         public bool IsConnected => _connection.IsConnected;
 
         public event Action? OnDisconnected;
-        public event Action<TransportError>? OnPacketReceivedHandlerFailed;
+
+        public event Action<IPacket, Action<IPacket>>? OnPacketReceived;
+        public event Action? OnPacketSent;
+
+        public event Action<TransportError>? OnHandlingPacketReceiveFailed;
+        public event Action<TransportError>? OnPacketReceiveFailed;
+
+        public event Action<TransportError>? OnHandlingPacketSendFailed;
+        public event Action<TransportError>? OnPacketSendFailed;
 
         public Peer(IConnection connection, PacketRegistry registry, IPacketEncryptor? encryptor = null)
         {
@@ -31,37 +39,51 @@ namespace DunePresentation.Peer
             _encryptor = encryptor;
 
             _connection.Transport.OnPacketReceived += OnPacketReceivedHandler;
+            _connection.Transport.OnPacketSent += OnPacketSentHandler;
+
             _connection.Transport.OnPacketReceiveFailed += OnPacketReceiveFailedHandler;
+            _connection.Transport.OnPacketSendFailed += OnPacketSendFailedHandler;
+
             _connection.OnDisconnected += OnDisconnectedHandler;
         }
 
-        public void StartReceiving()
+        public void Receive()
         {
             _connection.Transport.ReceiveAsync();
         }
-        
-        public bool Send<T>(T packet) where T : IPacket
+
+        public void Send<T>(T packet) where T : IPacket
         {
-            ushort packetId = packet.PacketId;
-            IPacketEncryptor? encryptor = _encryptor;
-
-            if (!packet.Serialize(_connection.Transport, (seg, size) =>
+            try
             {
-                var span = seg.Memory.Span;
-                PresentationHeader.Write(span, packetId);
+                ushort packetId = packet.PacketId;
+                IPacketEncryptor? encryptor = _encryptor;
 
-                if (encryptor != null)
-                    encryptor.Encrypt(span.Slice(0, size), span);
-            }))
-                return false;
+                if (!packet.Serialize(_connection.Transport, (seg, size) =>
+                {
+                    var span = seg.Memory.Span;
+                    PresentationHeader.Write(span, packetId);
 
-            packet.OnSend(_connection.Transport);
-            return true;
+                    if (encryptor != null)
+                        encryptor.Encrypt(span.Slice(0, size), span);
+                }))
+                {
+                    OnHandlingPacketSendFailed?.Invoke(TransportError.SerializationError);
+                    return;
+                }
+
+                _connection.Transport.SendAsync(packet.segment, packet.PacketSize);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Peer.Send | Exception:\n{ex}", "error");
+                OnHandlingPacketSendFailed?.Invoke(TransportError.HandlerFailed);
+            }
         }
 
-        public void Disconnect()
+        private void OnPacketSendFailedHandler(ITransport transport, Segment segment, TransportError reason)
         {
-            _connection.DisconnectAsync();
+            OnPacketSendFailed?.Invoke(reason);
         }
 
         private void OnPacketReceivedHandler(ITransport transport, SocketAsyncEventArgs args, Segment segment)
@@ -78,7 +100,7 @@ namespace DunePresentation.Peer
 
                 if (!_registry.TryGetEntry(packetId, out Entry entry))
                 {
-                    OnPacketReceivedHandlerFailed?.Invoke(TransportError.RegistryError);
+                    OnHandlingPacketReceiveFailed?.Invoke(TransportError.RegistryError);
                     return;
                 }
 
@@ -89,28 +111,36 @@ namespace DunePresentation.Peer
                 segmentOwned = false;
                 if (!packet.Deserialize())
                 {
-                    OnPacketReceivedHandlerFailed?.Invoke(TransportError.RegistryError);
+                    OnHandlingPacketReceiveFailed?.Invoke(TransportError.SerializationError);
                     return;
                 }
 
-                entry.Invoke(packet);
+                OnPacketReceived?.Invoke(packet, entry.Invoke);
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Peer.OnPacketReceivedHandler | Exception:\n{ex}", "error");
-                OnPacketReceivedHandlerFailed?.Invoke(TransportError.HandlerFailed);
+                OnHandlingPacketReceiveFailed?.Invoke(TransportError.HandlerFailed);
             }
             finally
             {
                 if (segmentOwned)
                     segment.Release();
-                transport.ReceiveAsync();
             }
+        }
+
+        private void OnPacketSentHandler(ITransport transport)
+        {
+            OnPacketSent?.Invoke();
         }
 
         private void OnPacketReceiveFailedHandler(ITransport transport, TransportError reason)
         {
-            Debug.WriteLine($"Peer.OnPacketReceiveFailedHandler | Receive failed ({reason}), disconnecting.", "error");
+            OnPacketReceiveFailed?.Invoke(reason);
+        }
+
+        public void Disconnect()
+        {
             _connection.DisconnectAsync();
         }
 
@@ -131,6 +161,8 @@ namespace DunePresentation.Peer
                 {
                     _connection.Transport.OnPacketReceived -= OnPacketReceivedHandler;
                     _connection.Transport.OnPacketReceiveFailed -= OnPacketReceiveFailedHandler;
+                    _connection.Transport.OnPacketSendFailed -= OnPacketSendFailedHandler;
+                    _connection.Transport.OnPacketSent -= OnPacketSentHandler;
                     _connection.OnDisconnected -= OnDisconnectedHandler;
                 }
             }
