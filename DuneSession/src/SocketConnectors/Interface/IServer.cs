@@ -3,7 +3,7 @@ using System.Net.Sockets;
 
 namespace DuneSession.SocketConnectors.Interface
 {
-    public interface IServer : IDisposable
+    public interface IServerConnector : IDisposable
     {
         bool IsListening { get; }
 

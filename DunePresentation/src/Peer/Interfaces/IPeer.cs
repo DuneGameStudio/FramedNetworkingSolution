@@ -22,6 +22,6 @@ namespace DunePresentation.Peer.Interfaces
 
         void Send<T>(T packet) where T : IPacket;
 
-        void Disconnect();
+        void DisconnectAsync();
     }
 }

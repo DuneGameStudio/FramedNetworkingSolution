@@ -16,8 +16,9 @@ namespace DunePresentation.Peer
     public class Peer : IPeer
     {
         private readonly IConnection _connection;
-        private readonly PacketRegistry _registry;
+        private readonly PacketRegistry _packetRegistry;
         private readonly IPacketEncryptor? _encryptor;
+        private int _disposed;
 
         public bool IsConnected => _connection.IsConnected;
 
@@ -32,10 +33,10 @@ namespace DunePresentation.Peer
         public event Action<TransportError>? OnHandlingPacketSendFailed;
         public event Action<TransportError>? OnPacketSendFailed;
 
-        public Peer(IConnection connection, PacketRegistry registry, IPacketEncryptor? encryptor = null)
+        public Peer(IConnection connection, PacketRegistry packetRegistry, IPacketEncryptor? encryptor = null)
         {
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
-            _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+            _packetRegistry = packetRegistry ?? throw new ArgumentNullException(nameof(packetRegistry));
             _encryptor = encryptor;
 
             _connection.Transport.OnPacketReceived += OnPacketReceivedHandler;
@@ -98,7 +99,7 @@ namespace DunePresentation.Peer
 
                 PresentationHeader.Read(span, out ushort packetId);
 
-                if (!_registry.TryGetEntry(packetId, out Entry entry))
+                if (!_packetRegistry.TryGetEntry(packetId, out Entry entry))
                 {
                     OnHandlingPacketReceiveFailed?.Invoke(TransportError.RegistryError);
                     return;
@@ -139,7 +140,7 @@ namespace DunePresentation.Peer
             OnPacketReceiveFailed?.Invoke(reason);
         }
 
-        public void Disconnect()
+        public void DisconnectAsync()
         {
             _connection.DisconnectAsync();
         }
@@ -149,31 +150,17 @@ namespace DunePresentation.Peer
             OnDisconnected?.Invoke();
         }
 
-        #region IDisposable
-
-        private int _disposed;
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0)
-            {
-                if (disposing)
-                {
-                    _connection.Transport.OnPacketReceived -= OnPacketReceivedHandler;
-                    _connection.Transport.OnPacketReceiveFailed -= OnPacketReceiveFailedHandler;
-                    _connection.Transport.OnPacketSendFailed -= OnPacketSendFailedHandler;
-                    _connection.Transport.OnPacketSent -= OnPacketSentHandler;
-                    _connection.OnDisconnected -= OnDisconnectedHandler;
-                }
-            }
-        }
-
         public void Dispose()
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
+            if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
-        #endregion
+            _connection.Transport.OnPacketReceived -= OnPacketReceivedHandler;
+            _connection.Transport.OnPacketReceiveFailed -= OnPacketReceiveFailedHandler;
+            _connection.Transport.OnPacketSendFailed -= OnPacketSendFailedHandler;
+            _connection.Transport.OnPacketSent -= OnPacketSentHandler;
+            _connection.OnDisconnected -= OnDisconnectedHandler;
+
+            _connection.Dispose();
+        }
     }
 }

@@ -30,6 +30,12 @@ namespace DuneTransport.Transport
         SerializationError,
 
         /// <summary>The socket was disconnected.</summary>
-        SocketDisconnected
+        SocketDisconnected,
+
+        /// <summary>ReceiveAsync was called while a previous receive is still in flight.</summary>
+        ReceiveAlreadyPending,
+
+        /// <summary>SendAsync was called while a previous send is still in flight.</summary>
+        SendAlreadyPending
     }
 }

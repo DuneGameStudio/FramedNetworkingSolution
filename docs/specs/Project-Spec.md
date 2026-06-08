@@ -18,7 +18,7 @@ Consumers depend on `DunePresentation` and treat the lower layers as implementat
 
 1. **The application owns the threading model.** The library does not create background threads, dispatch queues, or receive pumps. The host application decides how and when to call into the library.
 
-2. **The library never auto-disconnects.** Transport and peer layers surface errors with reason codes, but the application decides whether and when to disconnect. This gives game servers control over kick vs. timeout semantics.
+2. **The library never auto-disconnects on error conditions.** Socket errors (connection reset, network unreachable) surface as events with reason codes; the application decides whether to retry, disconnect, or dispose. A TCP FIN — the peer's explicit intent to close — triggers an automatic disconnect signal, since there is nothing left to recover.
 
 3. **No internal loops.** The only self-driving behavior is the receive re-arm in Transport — after each completed receive, the pipeline re-arms itself to handle stream fragmentation. Higher layers do not poll or wait.
 
@@ -30,24 +30,25 @@ Consumers depend on `DunePresentation` and treat the lower layers as implementat
 
 Raw byte send and receive with I/O error notification.
 
-- Manages a fixed-size memory pool carved from a single contiguous array. Memory is rented and returned explicitly. Releasing already-free memory is a no-op (idempotent release).
-- Wraps each packet with a length prefix on the wire. The receive pipeline reassembles fragmented stream reads into complete packets.
-- Surfaces I/O errors via events carrying a reason code. Never touches the socket lifecycle — the owning layer manages sockets.
+* Manages a fixed-size memory pool carved from a single contiguous array. Memory is rented and returned explicitly. Releasing already-free memory is a no-op (idempotent release).
+* Wraps each packet with a length prefix on the wire. The receive pipeline reassembles fragmented stream reads into complete packets.
+* Surfaces I/O errors via events carrying a reason code (`TransportError`). Never touches the socket lifecycle — the owning layer manages sockets.
+* Does not auto-disconnect on socket errors. `IsConnected` is only set to `false` on FIN and `Dispose()`. Socket errors leave the connection usable so the application can attempt recovery.
 
 ### Event Ownership
 
-- **Packet received:** segment ownership transfers to the subscriber. The subscriber must release it.
-- **Packet receive failed:** no segment is passed; any rented segment has already been released.
-- **Packet send failed:** the segment has already been released by the transport. Inspect only; do not release.
+* **Packet received:** segment ownership transfers to the subscriber. The subscriber must release it.
+* **Packet receive failed:** no segment is passed; any rented segment has already been released.
+* **Packet send failed:** the segment has already been released by the transport. Inspect only; do not release.
 
 ## Layer: Session
 
 Connection lifecycle management. Maps transport errors onto connection-level events.
 
-- Provides client and server connection factories that produce a connection handle. Entry points are guarded against reentrant calls.
-- The connection handle owns an underlying transport and exposes connection-level events (disconnected, disconnect requested).
-- Disconnect is single-shot — once initiated, it cannot be repeated.
-- Higher layers interact with connections through their transport interface, never touching sockets directly.
+* Provides client and server connection factories that produce a connection handle. Entry points are guarded against reentrant calls.
+* The connection handle owns an underlying transport and exposes a `OnDisconnected` event. The event fires for locally-initiated disconnects and remote FIN. Socket errors do not trigger disconnect — they bubble up via transport error events for the application to handle.
+* Disconnect is single-shot — once initiated, it cannot be repeated. `DisconnectAsync` is guarded against disposed and already-disconnected states.
+* Higher layers interact with connections through their transport interface, never touching sockets directly.
 
 ## Layer: Presentation
 
@@ -59,7 +60,7 @@ Implementers provide a packet ID and field-level serialization methods. The libr
 
 ### Packet Registry
 
-Maps packet IDs to factory and handler pairs. Registration is by type — the library infers the packet ID. Duplicate IDs throw. Unknown packet IDs at runtime raise an error event.
+Maps packet IDs to factory and handler pairs. Registration requires an explicit packet ID. Duplicate IDs throw. Unknown packet IDs at runtime raise an error event.
 
 ### Peer
 
@@ -69,24 +70,26 @@ On send: reserves a buffer slot, writes the packet header in a post-serialize ca
 
 `Receive()` is a single-shot dispatch. The application must call it repeatedly to process incoming packets.
 
+`Dispose()` unsubscribes all transport events and disposes the underlying connection, cleaning up the socket.
+
 ### Encryption
 
 An optional symmetric encryption hook applied in-place to the framed payload (header + fields) on both send and receive. The application supplies the encryption implementation.
 
 ### Connection Helpers
 
-PeerServer and PeerClient are factory helpers that wire up connectors, packet registry, and optional encryption, then produce ready-to-use peer instances. PeerServer accepts connections and creates a peer per client. PeerClient connects to a remote and creates a peer on success.
+PeerServer and PeerClient are factory helpers that wire up connectors, packet registry, and optional encryption, then produce ready-to-use peer instances. PeerServer accepts connections and creates a peer per client. PeerClient connects to a remote and creates a peer on success. The application owns each peer and is responsible for calling `Dispose()` when done.
 
 ## Concurrency Model
 
-- **No internal threads.** All operations are synchronous or callback-driven.
-- **Events fire on the calling thread.** No thread hopping.
-- **Application owns receive loop.** `Receive()` is called repeatedly by the application at its chosen cadence.
-- **Application owns disconnect decisions.** Errors surface as events; the application calls disconnect.
+* **No internal threads.** All operations are synchronous or callback-driven.
+* **Events fire on the calling thread.** No thread hopping.
+* **Application owns receive loop.** `Receive()` is called repeatedly by the application at its chosen cadence.
+* **Application owns disconnect decisions for errors.** Socket errors surface as events; the application calls disconnect or disposes. FIN triggers automatic disconnect.
 
 ## What Is Not Included
 
-- **Application-level protocols:** heartbeat, authentication, matchmaking
-- **Message queues or buffering:** the library delivers packets as they arrive
-- **Reliability or ordering guarantees:** TCP provides ordering; the library does not add retry or acknowledgment layers
-- **Multi-connection management:** each peer/connection is independent; the application manages collections
+* **Application-level protocols:** heartbeat, authentication, matchmaking
+* **Message queues or buffering:** the library delivers packets as they arrive
+* **Reliability or ordering guarantees:** TCP provides ordering; the library does not add retry or acknowledgment layers
+* **Multi-connection management:** each peer/connection is independent; the application manages collections

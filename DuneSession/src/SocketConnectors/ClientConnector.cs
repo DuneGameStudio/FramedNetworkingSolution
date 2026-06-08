@@ -7,12 +7,13 @@ using DuneSession.SocketConnectors.Interface;
 
 namespace DuneSession.SocketConnectors
 {
-    public class ClientConnector : IClient
+    public class ClientConnector : IClientConnector
     {
         private Socket? socket;
         private readonly SocketAsyncEventArgs connectEventArgs;
         private IConnection? connection;
         private volatile int connectingState;
+        private int _disposed;
 
         public bool IsConnected => connection?.IsConnected ?? false;
 
@@ -29,28 +30,28 @@ namespace DuneSession.SocketConnectors
         {
             if (IsConnected)
                 return false;
-            
+
             if (Interlocked.Exchange(ref connectingState, 1) != 0)
                 return false;
 
             try
             {
                 socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-                
+
                 connectEventArgs.RemoteEndPoint = new IPEndPoint(IPAddress.Parse(address), port);
-                
+
                 if (!socket.ConnectAsync(connectEventArgs))
                     ProcessConnect(connectEventArgs);
-                
+
                 return true;
             }
             catch (Exception e)
             {
                 Debug.WriteLine($"ConnectAsync Exception {e}");
-                
+
                 socket?.Dispose();
                 Interlocked.Exchange(ref connectingState, 0);
-                
+
                 return false;
             }
         }
@@ -77,31 +78,15 @@ namespace DuneSession.SocketConnectors
             }
         }
 
-        #region IDisposable
-
-        private int _disposed;
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0)
-            {
-                if (disposing)
-                {
-                    connectEventArgs.Completed -= OnConnectCompleted;
-
-                    connectEventArgs.Dispose();
-                    connection?.Dispose();
-                    socket = null;
-                }
-            }
-        }
-
         public void Dispose()
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
+            if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
-        #endregion
+            connectEventArgs.Completed -= OnConnectCompleted;
+            connectEventArgs.Dispose();
+            connection?.Dispose();
+            socket?.Dispose();
+            socket = null;
+        }
     }
 }

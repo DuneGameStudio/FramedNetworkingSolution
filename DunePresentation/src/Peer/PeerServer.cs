@@ -11,41 +11,40 @@ namespace DunePresentation.Peer
 {
     public sealed class PeerServer : IPeerServer
     {
-        private readonly PacketRegistry _registry;
+        private readonly PacketRegistry _packetRegistry;
         private readonly Func<IPacketEncryptor>? _encryptorFactory;
-        private readonly IServer _server;
+        private readonly IServerConnector _serverConnector;
 
         private int _disposed;
 
-        public bool IsListening => _server.IsListening;
+        public bool IsListening => _serverConnector.IsListening;
 
         public event Action<IPeer>? OnPeerConnected;
         public event Action<SocketError>? OnAcceptFailed;
 
-        public PeerServer(PacketRegistry registry, Func<IPacketEncryptor>? encryptorFactory = null, IServer? server = null)
+        public PeerServer(PacketRegistry packetRegistry, Func<IPacketEncryptor>? encryptorFactory = null, IServerConnector? server = null)
         {
-            _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+            _packetRegistry = packetRegistry ?? throw new ArgumentNullException(nameof(packetRegistry));
             _encryptorFactory = encryptorFactory;
 
-            _server = server ?? new ServerConnector();
-            _server.OnClientConnected += HandleClientConnected;
-            _server.OnAcceptFailed += HandleAcceptFailed;
+            _serverConnector = server ?? new ServerConnector();
+            _serverConnector.OnClientConnected += HandleClientConnected;
+            _serverConnector.OnAcceptFailed += HandleAcceptFailed;
         }
 
         public void StartListening(string address, int port)
-            => _server.StartListening(address, port);
+            => _serverConnector.StartListening(address, port);
 
         public void StopListening()
-            => _server.StopListening();
+            => _serverConnector.StopListening();
 
         public void AcceptConnection()
-            => _server.AcceptConnection();
+            => _serverConnector.AcceptConnection();
 
         private void HandleClientConnected(IConnection connection)
         {
             IPacketEncryptor? encryptor = _encryptorFactory?.Invoke();
-            var peer = new Peer(connection, _registry, encryptor);
-            peer.Receive();
+            var peer = new Peer(connection, _packetRegistry, encryptor);
             OnPeerConnected?.Invoke(peer);
         }
 
@@ -56,9 +55,9 @@ namespace DunePresentation.Peer
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
-            _server.OnClientConnected -= HandleClientConnected;
-            _server.OnAcceptFailed -= HandleAcceptFailed;
-            _server.Dispose();
+            _serverConnector.OnClientConnected -= HandleClientConnected;
+            _serverConnector.OnAcceptFailed -= HandleAcceptFailed;
+            _serverConnector.Dispose();
         }
     }
 }

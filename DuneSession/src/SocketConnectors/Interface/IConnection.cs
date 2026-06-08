@@ -9,7 +9,6 @@ namespace DuneSession.SocketConnectors.Interface
         ITransport Transport { get; }
 
         event Action? OnDisconnected;
-        event Action? OnDisconnectRequested;
 
         void DisconnectAsync();
     }

@@ -7,17 +7,24 @@ using DuneSession.SocketConnectors.Interface;
 
 namespace DuneSession.SocketConnectors
 {
-    public class ServerConnector : IServer
+    public class ServerConnector : IServerConnector
     {
         private readonly Socket socket;
         private readonly SocketAsyncEventArgs acceptEventArgs;
 
         private volatile int isListening;
+        private int _disposed;
 
         public bool IsListening => isListening == 1;
 
         public event Action<IConnection>? OnClientConnected;
         public event Action<SocketError>? OnAcceptFailed;
+
+        /// <summary>
+        /// Listen backlog. Linux default somaxconn is 128; Windows caps at 511.
+        /// 128 is the safe cross-platform default.
+        /// </summary>
+        private const int ListenBacklog = 128;
 
         public ServerConnector()
         {
@@ -41,14 +48,14 @@ namespace DuneSession.SocketConnectors
 
                 socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
                 socket.Bind(endPoint);
-                socket.Listen((int)SocketOptionName.MaxConnections);
-                
+                socket.Listen(ListenBacklog);
+
                 Debug.WriteLine($"Server started listening on {address}:{port}", "log");
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"StartListening | Failed to start server: {ex.Message}", "Error");
                 isListening = 0;
+                throw;
             }
         }
 
@@ -56,7 +63,7 @@ namespace DuneSession.SocketConnectors
         {
             if (Interlocked.Exchange(ref isListening, 0) != 1)
                 return;
-            
+
             try
             {
                 socket.Close();
@@ -67,10 +74,10 @@ namespace DuneSession.SocketConnectors
                 Debug.WriteLine($"StopListening | Error during shutdown: {ex.Message}", "Error");
             }
         }
-        
+
         public void AcceptConnection()
         {
-            if (!IsListening) 
+            if (!IsListening)
                 return;
 
             acceptEventArgs.AcceptSocket = null;
@@ -101,9 +108,9 @@ namespace DuneSession.SocketConnectors
 
         private void ProcessAccept(SocketAsyncEventArgs e)
         {
-            if (!IsListening) 
+            if (!IsListening)
                 return;
-            
+
             if (e.SocketError == SocketError.Success && e.AcceptSocket != null)
             {
                 IConnection connection = new Connection(e.AcceptSocket);
@@ -115,30 +122,13 @@ namespace DuneSession.SocketConnectors
             }
         }
 
-        #region IDisposable
-
-        private int _disposed;
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0)
-            {
-                if (disposing)
-                {
-                    acceptEventArgs.Completed -= OnAcceptCompleted;
-
-                    socket.Dispose();
-                    acceptEventArgs.Dispose();
-                }
-            }
-        }
-
         public void Dispose()
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
+            if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
-        #endregion
+            acceptEventArgs.Completed -= OnAcceptCompleted;
+            socket.Dispose();
+            acceptEventArgs.Dispose();
+        }
     }
 }

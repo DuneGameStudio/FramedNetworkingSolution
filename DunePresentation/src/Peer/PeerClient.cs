@@ -11,35 +11,34 @@ namespace DunePresentation.Peer
 {
     public sealed class PeerClient : IPeerClient
     {
-        private readonly PacketRegistry _registry;
+        private readonly PacketRegistry _packetRegistry;
         private readonly Func<IPacketEncryptor>? _encryptorFactory;
-        private readonly IClient _client;
+        private readonly IClientConnector _clientConnector;
 
         private int _disposed;
 
-        public bool IsConnected => _client.IsConnected;
+        public bool IsConnected => _clientConnector.IsConnected;
 
         public event Action<IPeer>? OnPeerConnected;
         public event Action<SocketError>? OnConnectFailed;
 
-        public PeerClient(PacketRegistry registry, Func<IPacketEncryptor>? encryptorFactory = null, IClient? client = null)
+        public PeerClient(PacketRegistry packetRegistry, Func<IPacketEncryptor>? encryptorFactory = null, IClientConnector? client = null)
         {
-            _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+            _packetRegistry = packetRegistry ?? throw new ArgumentNullException(nameof(packetRegistry));
             _encryptorFactory = encryptorFactory;
 
-            _client = client ?? new ClientConnector();
-            _client.OnConnected += HandleConnected;
-            _client.OnConnectFailed += HandleConnectFailed;
+            _clientConnector = client ?? new ClientConnector();
+            _clientConnector.OnConnected += HandleConnected;
+            _clientConnector.OnConnectFailed += HandleConnectFailed;
         }
 
         public bool ConnectAsync(string address, int port)
-            => _client.ConnectAsync(address, port);
+            => _clientConnector.ConnectAsync(address, port);
 
         private void HandleConnected(IConnection connection)
         {
             IPacketEncryptor? encryptor = _encryptorFactory?.Invoke();
-            var peer = new Peer(connection, _registry, encryptor);
-            peer.Receive();
+            var peer = new Peer(connection, _packetRegistry, encryptor);
             OnPeerConnected?.Invoke(peer);
         }
 
@@ -50,9 +49,9 @@ namespace DunePresentation.Peer
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
-            _client.OnConnected -= HandleConnected;
-            _client.OnConnectFailed -= HandleConnectFailed;
-            _client.Dispose();
+            _clientConnector.OnConnected -= HandleConnected;
+            _clientConnector.OnConnectFailed -= HandleConnectFailed;
+            _clientConnector.Dispose();
         }
     }
 }

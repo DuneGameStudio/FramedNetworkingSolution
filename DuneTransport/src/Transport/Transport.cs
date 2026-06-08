@@ -42,8 +42,6 @@ namespace DuneTransport.Transport
         public event Action<ITransport, SocketAsyncEventArgs, Segment>? OnPacketReceived;
         public event Action<ITransport, TransportError>? OnPacketReceiveFailed;
 
-        public event Action? OnDisconnectRequested;
-
         public Transport(Socket socket)
         {
             this.socket = socket ?? throw new ArgumentNullException(nameof(socket));
@@ -58,25 +56,22 @@ namespace DuneTransport.Transport
             receiveEventArgs.Completed += OnPacketReceivedEventHandler;
         }
 
-        private void ThrowIfDisposed()
+        public void ReceiveAsync()
         {
             if (Volatile.Read(ref _disposed) == 1)
             {
-                throw new ObjectDisposedException(nameof(Transport));
+                OnPacketReceiveFailed?.Invoke(this, TransportError.ObjectDisposed);
+                return;
             }
-        }
-
-        public void ReceiveAsync()
-        {
-            ThrowIfDisposed();
-
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Transport is not connected.");
+                OnPacketReceiveFailed?.Invoke(this, TransportError.SocketDisconnected);
+                return;
             }
             if (Interlocked.CompareExchange(ref _receiveInFlight, 1, 0) != 0)
             {
-                throw new InvalidOperationException("ReceiveAsync called while a previous receive is in flight.");
+                OnPacketReceiveFailed?.Invoke(this, TransportError.ReceiveAlreadyPending);
+                return;
             }
 
             if (!receiveBuffer.TryReserveSegment(out Segment newSegment))
@@ -120,7 +115,6 @@ namespace DuneTransport.Transport
                     {
                         Debug.WriteLine($"IssueReceive | SocketException: {ex.Message}", "error");
                         currentReceivingSegment.Release();
-                        IsConnected = false;
                         Interlocked.Exchange(ref _receiveInFlight, 0);
                         OnPacketReceiveFailed?.Invoke(this, TransportError.SocketError);
                         return;
@@ -165,7 +159,6 @@ namespace DuneTransport.Transport
             if (onReceived.SocketError != SocketError.Success)
             {
                 currentReceivingSegment.Release();
-                IsConnected = false;
                 Interlocked.Exchange(ref _receiveInFlight, 0);
                 OnPacketReceiveFailed?.Invoke(this, TransportError.SocketError);
                 return false;
@@ -177,7 +170,7 @@ namespace DuneTransport.Transport
                 currentReceivingSegment.Release();
                 IsConnected = false;
                 Interlocked.Exchange(ref _receiveInFlight, 0);
-                OnDisconnectRequested?.Invoke();
+                OnPacketReceiveFailed?.Invoke(this, TransportError.SocketDisconnected);
                 return false;
             }
 
@@ -202,7 +195,6 @@ namespace DuneTransport.Transport
                     Debug.WriteLine("ProcessReceive | Zero-length payload rejected.", "error");
                     Interlocked.Exchange(ref _receiveInFlight, 0);
                     OnPacketReceiveFailed?.Invoke(this, TransportError.ProtocolError);
-                    OnDisconnectRequested?.Invoke();
                     return false;
                 }
 
@@ -212,7 +204,6 @@ namespace DuneTransport.Transport
                     Debug.WriteLine($"ProcessReceive | Oversized payload ({payloadLength} > {receiveBuffer.SegmentSize}) rejected.", "error");
                     Interlocked.Exchange(ref _receiveInFlight, 0);
                     OnPacketReceiveFailed?.Invoke(this, TransportError.ProtocolError);
-                    OnDisconnectRequested?.Invoke();
                     return false;
                 }
 
@@ -261,7 +252,11 @@ namespace DuneTransport.Transport
 
         public bool TryReserveSendPacket(out Segment segment)
         {
-            ThrowIfDisposed();
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                segment = default;
+                return false;
+            }
             if (!sendBuffer.TryReserveSegment(out segment))
                 return false;
 
@@ -271,19 +266,23 @@ namespace DuneTransport.Transport
 
         public void SendAsync(Segment packet, int packetSize)
         {
-            ThrowIfDisposed();
-
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                packet.Release();
+                OnPacketSendFailed?.Invoke(this, packet, TransportError.ObjectDisposed);
+                return;
+            }
             if (!IsConnected)
             {
                 packet.Release();
-                // throw new InvalidOperationException("Transport is not connected.");
                 OnPacketSendFailed?.Invoke(this, packet, TransportError.SocketDisconnected);
                 return;
             }
-
             if (Interlocked.CompareExchange(ref _sendInFlight, 1, 0) != 0)
             {
-                throw new InvalidOperationException("SendAsync called while a previous send is in flight.");
+                packet.Release();
+                OnPacketSendFailed?.Invoke(this, packet, TransportError.SendAlreadyPending);
+                return;
             }
 
             if (!sendBuffer.GetRegisteredMemory(packet.SegmentIndex, packetSize + HeaderSize, out Memory<byte> memory))
@@ -321,7 +320,6 @@ namespace DuneTransport.Transport
                 var failed = currentSendingSegment;
                 currentSendingSegment = default;
                 failed.Release();
-                IsConnected = false;
                 Interlocked.Exchange(ref _sendInFlight, 0);
                 OnPacketSendFailed?.Invoke(this, failed, TransportError.SocketError);
             }
@@ -349,7 +347,6 @@ namespace DuneTransport.Transport
                 var seg = currentSendingSegment;
                 currentSendingSegment = default;
                 seg.Release();
-                IsConnected = false;
                 Interlocked.Exchange(ref _sendInFlight, 0);
                 OnPacketSendFailed?.Invoke(this, seg, TransportError.SocketError);
                 return;

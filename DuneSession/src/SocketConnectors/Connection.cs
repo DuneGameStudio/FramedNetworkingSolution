@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Threading;
 using DuneSession.SocketConnectors.Interface;
+using DuneTransport.Transport;
 using DuneTransport.Transport.Interface;
 
 namespace DuneSession.SocketConnectors
@@ -13,38 +14,39 @@ namespace DuneSession.SocketConnectors
         private volatile int connectedState;
         private volatile int disconnectingState;
 
-        public bool IsConnected => connectedState == 1;
+        public bool IsConnected => connectedState == 1 && Transport.IsConnected;
         public ITransport Transport { get; }
 
-        public event Action? OnDisconnectRequested;
         public event Action? OnDisconnected;
 
         private readonly SocketAsyncEventArgs disconnectAsyncSocketAsyncEventArgs;
+        private int _disposed;
 
         public Connection(Socket socket)
         {
             this.socket = socket ?? throw new ArgumentNullException(nameof(socket));
             connectedState = 1;
 
-            Transport = new DuneTransport.Transport.Transport(socket);
-            Transport.OnDisconnectRequested += HandleDisconnectRequested;
-            
+            Transport = new Transport(socket);
+            Transport.OnPacketReceiveFailed += OnTransportReceiveFailed;
+
             disconnectAsyncSocketAsyncEventArgs = new SocketAsyncEventArgs();
             disconnectAsyncSocketAsyncEventArgs.Completed += OnDisconnect;
         }
 
-        private void HandleDisconnectRequested()
-        {
-            OnDisconnectRequested?.Invoke();
-        }
-
         public void DisconnectAsync()
         {
+            if (Volatile.Read(ref _disposed) == 1)
+                return;
+
+            if (connectedState != 1)
+                return;
+
             if (Interlocked.Exchange(ref disconnectingState, 1) != 0)
                 return;
-            
+
             disconnectAsyncSocketAsyncEventArgs.DisconnectReuseSocket = false;
-            
+
             if (!socket.DisconnectAsync(disconnectAsyncSocketAsyncEventArgs))
             {
                 OnDisconnect(this, disconnectAsyncSocketAsyncEventArgs);
@@ -60,32 +62,27 @@ namespace DuneSession.SocketConnectors
             OnDisconnected?.Invoke();
         }
 
-        #region IDisposable
-
-        private int _disposed;
-
-        protected virtual void Dispose(bool disposing)
+        private void OnTransportReceiveFailed(ITransport transport, TransportError reason)
         {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0)
-            {
-                if (disposing)
-                {
-                    Transport.Dispose();
-                    Transport.OnDisconnectRequested -= HandleDisconnectRequested;
-                    disconnectAsyncSocketAsyncEventArgs.Completed -= OnDisconnect;
+            if (reason != TransportError.SocketDisconnected)
+                return;
 
-                    disconnectAsyncSocketAsyncEventArgs.Dispose();
-                    socket.Dispose();
-                }
-            }
+            if (Interlocked.Exchange(ref connectedState, 0) != 1)
+                return;
+
+            socket.Close();
+            OnDisconnected?.Invoke();
         }
 
         public void Dispose()
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
+            if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
-        #endregion
+            disconnectAsyncSocketAsyncEventArgs.Completed -= OnDisconnect;
+            Transport.OnPacketReceiveFailed -= OnTransportReceiveFailed;
+            disconnectAsyncSocketAsyncEventArgs.Dispose();
+            Transport.Dispose();
+            socket.Dispose();
+        }
     }
 }
