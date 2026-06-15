@@ -36,12 +36,6 @@ namespace DuneSession.SocketConnectors
 
         public void StartListening(string address, int port)
         {
-            if (Interlocked.Exchange(ref isListening, 1) != 0)
-            {
-                Debug.WriteLine("StartListening | Server is already running.", "Error");
-                return;
-            }
-
             try
             {
                 IPEndPoint endPoint = new IPEndPoint(IPAddress.Parse(address), port);
@@ -49,14 +43,20 @@ namespace DuneSession.SocketConnectors
                 socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
                 socket.Bind(endPoint);
                 socket.Listen(ListenBacklog);
-
-                Debug.WriteLine($"Server started listening on {address}:{port}", "log");
             }
             catch
             {
-                isListening = 0;
                 throw;
             }
+
+            if (Interlocked.Exchange(ref isListening, 1) != 0)
+            {
+                isListening = 0;
+                Debug.WriteLine("StartListening | Server was already running.", "Error");
+                return;
+            }
+
+            Debug.WriteLine($"Server started listening on {address}:{port}", "log");
         }
 
         public void StopListening()

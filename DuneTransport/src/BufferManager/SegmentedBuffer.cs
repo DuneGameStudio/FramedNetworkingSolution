@@ -1,5 +1,6 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Threading;
 
 namespace DuneTransport.BufferManager
 {
@@ -17,9 +18,9 @@ namespace DuneTransport.BufferManager
 
         readonly int segmentCount;
 
-        readonly Queue<int> freeSegments;
+        readonly ConcurrentQueue<int> freeSegments;
 
-        readonly bool[] isAllocated;
+        readonly int[] isAllocated; // 0 = free, 1 = allocated (accessed via Interlocked)
 
         public SegmentedBuffer(int arrayLength = 8192, int segmentCount = 32)
         {
@@ -28,8 +29,8 @@ namespace DuneTransport.BufferManager
 
             data = new byte[arrayLength];
 
-            freeSegments = new Queue<int>(segmentCount);
-            isAllocated = new bool[segmentCount + 1];
+            freeSegments = new ConcurrentQueue<int>();
+            isAllocated = new int[segmentCount + 1];
 
             for (int i = 1; i <= segmentCount; i++)
                 freeSegments.Enqueue(i);
@@ -42,7 +43,7 @@ namespace DuneTransport.BufferManager
             if (!freeSegments.TryDequeue(out int segmentIndex))
                 return false;
 
-            isAllocated[segmentIndex] = true;
+            Interlocked.Exchange(ref isAllocated[segmentIndex], 1);
 
             int segmentStart = (segmentIndex - 1) * segmentSize;
             segment.SegmentIndex = segmentIndex;
@@ -56,14 +57,11 @@ namespace DuneTransport.BufferManager
             if (segmentNumber < 1 || segmentNumber > segmentCount)
                 throw new ArgumentOutOfRangeException(nameof(segmentNumber));
 
-            if (!isAllocated[segmentNumber])
-            {
-                // Idempotent: already free. Transport relies on this for
-                // handler-throw and dispose-race cleanup paths.
+            // Atomic check-and-clear: if already free (0), return immediately.
+            // Idempotent: Transport relies on this for handler-throw and dispose-race cleanup paths.
+            if (Interlocked.Exchange(ref isAllocated[segmentNumber], 0) == 0)
                 return;
-            }
 
-            isAllocated[segmentNumber] = false;
             freeSegments.Enqueue(segmentNumber);
         }
 

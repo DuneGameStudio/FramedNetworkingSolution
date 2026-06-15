@@ -12,17 +12,17 @@ The library targets netstandard2.1 and is structured as three stacked layers, ea
 DunePresentation → DuneSession → DuneTransport
 ```
 
-Consumers depend on `DunePresentation` and treat the lower layers as implementation detail.
+Consumers depend on `DunePresentation` and treat the lower layers as implementation detail. The Presentation layer exposes lower-layer functionality in the way it sees fit — the application interacts with the library through this single entry point.
 
 ## Design Principles
 
-1. **The application owns the threading model.** The library does not create background threads, dispatch queues, or receive pumps. The host application decides how and when to call into the library.
+1. **The application owns the threading model.** The library does not create background threads, dispatch queues, or receive pumps. The host application decides how and when to call into the library, and is free to structure its own threads, tasks, and loops however it sees fit.
 
 2. **The library never auto-disconnects on error conditions.** Socket errors (connection reset, network unreachable) surface as events with reason codes; the application decides whether to retry, disconnect, or dispose. A TCP FIN — the peer's explicit intent to close — triggers an automatic disconnect signal, since there is nothing left to recover.
 
-3. **No internal loops.** The only self-driving behavior is the receive re-arm in Transport — after each completed receive, the pipeline re-arms itself to handle stream fragmentation. Higher layers do not poll or wait.
+3. **No internal loops.** The only self-driving behavior is the receive re-arm in Transport — after each completed receive, the pipeline re-arms itself to handle stream fragmentation. The application may run its own loops (e.g., a main loop iterating over connected sockets), but the library does not impose or require any.
 
-4. **Single-flight per connection.** Each connection accepts one send and one receive operation at a time. Reentrant calls are rejected. Higher layers serialize their own calls.
+4. **Single-flight per connection.** Each connection accepts one send and one receive operation at a time. Reentrant calls are rejected with a reason code. The application is responsible for serializing its own calls.
 
 5. **Zero-copy serialization.** Packets serialize and deserialize directly into and from pooled byte buffers without intermediate allocations. The library uses a fixed-size segment pool — there is no per-packet garbage collection.
 
@@ -39,7 +39,21 @@ Raw byte send and receive with I/O error notification.
 
 * **Packet received:** segment ownership transfers to the subscriber. The subscriber must release it.
 * **Packet receive failed:** no segment is passed; any rented segment has already been released.
-* **Packet send failed:** the segment has already been released by the transport. Inspect only; do not release.
+* **Packet send failed:** segment ownership transfers to the subscriber. The subscriber must either retry with `SendAsync()` or call `Release()`. All error types follow this same contract — the application decides based on the `TransportError` code.
+
+### API Caveats
+
+**Send retry contract:** When `OnPacketSendFailed` fires, the internal `_sendInFlight` guard is cleared and the transport can technically accept a new `SendAsync()` call. However, the application must not send a different packet until the failed one is resolved — either retried or released. Sending a new packet while a previous failure is unresolved is an application-level error: the library provides no ordering or queuing guarantees, and packets may arrive out of intended sequence.
+
+### Edge Cases
+
+**Dispose race with in-flight send:** If `Dispose()` runs concurrently with a completing send operation, one of three outcomes occurs:
+
+* **Dispose wins:** `Dispose()` sets `_disposed = 1`, sweeps `currentSendingSegment` via the `_sendInFlight` check, and releases it. When the send callback fires, it sees `_disposed == 1`, releases silently (idempotent — safe), and does **not** fire `OnPacketSendFailed`. The application never sees the failure.
+* **Callback wins:** The send callback fires first, invokes the appropriate event (`OnPacketSent` or `OnPacketSendFailed`), and clears `_sendInFlight`. When `Dispose()` runs, its `_sendInFlight` sweep finds `0` and skips the send branch. If the callback transferred segment ownership to the app (failure case), the app must release it before the transport's `SegmentedBuffer` is garbage collected.
+* **True simultaneous:** Both execute in overlapping windows. The idempotent `ReleaseMemory` in `SegmentedBuffer` prevents pool corruption from double-release. The `_disposed` check in the callback determines whether the event fires.
+
+In all cases, no events fire after `Dispose()` completes. The application should not rely on receiving `OnPacketSendFailed` during shutdown.
 
 ## Layer: Session
 
@@ -52,7 +66,7 @@ Connection lifecycle management. Maps transport errors onto connection-level eve
 
 ## Layer: Presentation
 
-Packet dispatch, registration, and encryption.
+Packet dispatch, registration, and encryption. The application's primary entry point — it exposes the lower layers' functionality in the way the Presentation layer sees fit.
 
 ### Packet Interface
 
@@ -68,8 +82,6 @@ Wires transport, registry, and encryption together. On receive: decrypts (if con
 
 On send: reserves a buffer slot, writes the packet header in a post-serialize callback, and sends. On errors, raises the appropriate event — it never auto-disconnects.
 
-`Receive()` is a single-shot dispatch. The application must call it repeatedly to process incoming packets.
-
 `Dispose()` unsubscribes all transport events and disposes the underlying connection, cleaning up the socket.
 
 ### Encryption
@@ -80,12 +92,37 @@ An optional symmetric encryption hook applied in-place to the framed payload (he
 
 PeerServer and PeerClient are factory helpers that wire up connectors, packet registry, and optional encryption, then produce ready-to-use peer instances. PeerServer accepts connections and creates a peer per client. PeerClient connects to a remote and creates a peer on success. The application owns each peer and is responsible for calling `Dispose()` when done.
 
-## Concurrency Model
+## Threading Model
 
-* **No internal threads.** All operations are synchronous or callback-driven.
-* **Events fire on the calling thread.** No thread hopping.
-* **Application owns receive loop.** `Receive()` is called repeatedly by the application at its chosen cadence.
-* **Application owns disconnect decisions for errors.** Socket errors surface as events; the application calls disconnect or disposes. FIN triggers automatic disconnect.
+The library is designed to support an application-owned threading model where the host application structures its own threads and tasks around the library's callback-driven API. A reference pattern:
+
+```
+Application Side                          Library Side
+────────────────                          ────────────
+Task: listen + accept loop                │
+  → produces Peer per connection          │
+                                         │
+Task: main loop over connected Peers      │
+  → per-peer:                            │
+      task calling ReceiveAsync()        │  ← SAEA Completion Callback
+      task calling SendAsync()           │     (thread-pool thread)
+      on receive callback →              │     ↓
+        mark ready, queue packet         │     ProcessReceive / ProcessSend
+      on send callback →                 │     ↓
+        mark ready                       │     Fire events
+      main loop conditionally            │     (OnPacketReceived, etc.)
+        re-arms send/receive             │
+                                         │
+  → only one send + one receive          │
+     active at a time per peer           │
+```
+
+Key properties:
+
+* **The library provides no task-based APIs.** All I/O is callback-driven via `SocketAsyncEventArgs`. The application owns all scheduling — it wraps callbacks in tasks, queues, or threads as it sees fit.
+* **Events fire on I/O completion threads.** SAEA callbacks execute on whatever thread-pool thread completed the socket operation. Event handlers must not assume they run on the caller's thread.
+* **The application decides when to re-arm.** A socket being ready to send or receive is a necessary but not sufficient condition — the application may choose not to re-arm (e.g., during shutdown, backpressure, or resource constraints). The library never forces an operation.
+* **Cross-thread data passing is the application's responsibility.** If the application queues packets from an I/O callback thread for consumption on a main loop thread, it must provide its own synchronization (e.g., `ConcurrentQueue<T>`). The library does not impose or provide this.
 
 ## What Is Not Included
 

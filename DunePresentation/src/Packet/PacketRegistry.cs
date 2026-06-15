@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using DunePresentation.Packet.Interfaces;
 
 namespace DunePresentation.Packet
@@ -18,19 +18,19 @@ namespace DunePresentation.Packet
 
     public sealed class PacketRegistry
     {
-        private readonly Dictionary<ushort, Entry> _entries = new Dictionary<ushort, Entry>();
+        private readonly ConcurrentDictionary<ushort, Entry> _entries = new ConcurrentDictionary<ushort, Entry>();
 
         public void RegisterHandler<T>(ushort packetId, Action<T> handler) where T : IPacket, new()
         {
             if (handler == null)
                 throw new ArgumentNullException(nameof(handler));
 
-            if (_entries.ContainsKey(packetId))
-                throw new InvalidOperationException($"PacketId {packetId} is already registered.");
-
-            _entries[packetId] = new Entry(
+            if (!_entries.TryAdd(packetId, new Entry(
                 factory: () => new T(),
-                invoke: packet => handler((T)packet));
+                invoke: packet => handler((T)packet))))
+            {
+                throw new InvalidOperationException($"PacketId {packetId} is already registered.");
+            }
         }
 
         internal bool TryGetEntry(ushort packetId, out Entry entry)

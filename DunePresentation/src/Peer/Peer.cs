@@ -18,6 +18,7 @@ namespace DunePresentation.Peer
         private readonly IConnection _connection;
         private readonly PacketRegistry _packetRegistry;
         private readonly IPacketEncryptor? _encryptor;
+        private IPacket? _currentSendingPacket;
         private int _disposed;
 
         public bool IsConnected => _connection.IsConnected;
@@ -31,7 +32,7 @@ namespace DunePresentation.Peer
         public event Action<TransportError>? OnPacketReceiveFailed;
 
         public event Action<TransportError>? OnHandlingPacketSendFailed;
-        public event Action<TransportError>? OnPacketSendFailed;
+        public event Action<IPacket, TransportError>? OnPacketSendFailed;
 
         public Peer(IConnection connection, PacketRegistry packetRegistry, IPacketEncryptor? encryptor = null)
         {
@@ -73,6 +74,7 @@ namespace DunePresentation.Peer
                     return;
                 }
 
+                _currentSendingPacket = packet;
                 _connection.Transport.SendAsync(packet.segment, packet.PacketSize);
             }
             catch (Exception ex)
@@ -84,7 +86,10 @@ namespace DunePresentation.Peer
 
         private void OnPacketSendFailedHandler(ITransport transport, Segment segment, TransportError reason)
         {
-            OnPacketSendFailed?.Invoke(reason);
+            var packet = _currentSendingPacket!;
+            _currentSendingPacket = null;
+            segment.Release();
+            OnPacketSendFailed?.Invoke(packet, reason);
         }
 
         private void OnPacketReceivedHandler(ITransport transport, SocketAsyncEventArgs args, Segment segment)
@@ -132,6 +137,7 @@ namespace DunePresentation.Peer
 
         private void OnPacketSentHandler(ITransport transport)
         {
+            _currentSendingPacket = null;
             OnPacketSent?.Invoke();
         }
 

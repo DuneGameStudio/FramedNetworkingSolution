@@ -14,8 +14,8 @@ namespace DuneTransport.Transport
 
         private readonly Socket socket;
 
-        public SegmentedBuffer receiveBuffer { get; }
-        public SegmentedBuffer sendBuffer { get; }
+        private SegmentedBuffer receiveBuffer { get; }
+        private SegmentedBuffer sendBuffer { get; }
 
         private enum ReceivePhase { Header, Payload }
 
@@ -33,7 +33,8 @@ namespace DuneTransport.Transport
         private int _sendInFlight;    // 0/1 via Interlocked.CompareExchange
         private int _receiveInFlight; // 0/1 via Interlocked.CompareExchange
 
-        public bool IsConnected { get; private set; } = true;
+        private volatile bool _isConnected = true;
+        public bool IsConnected => _isConnected;
         public bool IsDisposed => Volatile.Read(ref _disposed) == 1;
 
         public event Action<ITransport>? OnPacketSent;
@@ -150,16 +151,16 @@ namespace DuneTransport.Transport
             // Dispose raced with this callback. Release and exit silently.
             if (Volatile.Read(ref _disposed) == 1)
             {
-                currentReceivingSegment.Release();
                 Interlocked.Exchange(ref _receiveInFlight, 0);
+                currentReceivingSegment.Release();
                 return false;
             }
 
             // Socket-level error → release, bubble, stop.
             if (onReceived.SocketError != SocketError.Success)
             {
-                currentReceivingSegment.Release();
                 Interlocked.Exchange(ref _receiveInFlight, 0);
+                currentReceivingSegment.Release();
                 OnPacketReceiveFailed?.Invoke(this, TransportError.SocketError);
                 return false;
             }
@@ -167,9 +168,9 @@ namespace DuneTransport.Transport
             // Graceful close (FIN) — regardless of current phase.
             if (onReceived.BytesTransferred == 0)
             {
-                currentReceivingSegment.Release();
-                IsConnected = false;
                 Interlocked.Exchange(ref _receiveInFlight, 0);
+                currentReceivingSegment.Release();
+                _isConnected = false;
                 OnPacketReceiveFailed?.Invoke(this, TransportError.SocketDisconnected);
                 return false;
             }
@@ -268,19 +269,16 @@ namespace DuneTransport.Transport
         {
             if (Volatile.Read(ref _disposed) == 1)
             {
-                packet.Release();
                 OnPacketSendFailed?.Invoke(this, packet, TransportError.ObjectDisposed);
                 return;
             }
             if (!IsConnected)
             {
-                packet.Release();
                 OnPacketSendFailed?.Invoke(this, packet, TransportError.SocketDisconnected);
                 return;
             }
             if (Interlocked.CompareExchange(ref _sendInFlight, 1, 0) != 0)
             {
-                packet.Release();
                 OnPacketSendFailed?.Invoke(this, packet, TransportError.SendAlreadyPending);
                 return;
             }
@@ -288,7 +286,6 @@ namespace DuneTransport.Transport
             if (!sendBuffer.GetRegisteredMemory(packet.SegmentIndex, packetSize + HeaderSize, out Memory<byte> memory))
             {
                 Interlocked.Exchange(ref _sendInFlight, 0);
-                packet.Release();
                 OnPacketSendFailed?.Invoke(this, packet, TransportError.InvalidSegment);
                 return;
             }
@@ -310,7 +307,6 @@ namespace DuneTransport.Transport
                 Debug.WriteLine("SendAsync | ObjectDisposedException", "error");
                 var failed = currentSendingSegment;
                 currentSendingSegment = default;
-                failed.Release();
                 Interlocked.Exchange(ref _sendInFlight, 0);
                 OnPacketSendFailed?.Invoke(this, failed, TransportError.SocketError);
             }
@@ -319,7 +315,6 @@ namespace DuneTransport.Transport
                 Debug.WriteLine($"SendAsync | SocketException: {ex.Message}", "error");
                 var failed = currentSendingSegment;
                 currentSendingSegment = default;
-                failed.Release();
                 Interlocked.Exchange(ref _sendInFlight, 0);
                 OnPacketSendFailed?.Invoke(this, failed, TransportError.SocketError);
             }
@@ -337,8 +332,8 @@ namespace DuneTransport.Transport
             {
                 var seg = currentSendingSegment;
                 currentSendingSegment = default;
-                seg.Release();
                 Interlocked.Exchange(ref _sendInFlight, 0);
+                seg.Release();
                 return;
             }
 
@@ -346,7 +341,6 @@ namespace DuneTransport.Transport
             {
                 var seg = currentSendingSegment;
                 currentSendingSegment = default;
-                seg.Release();
                 Interlocked.Exchange(ref _sendInFlight, 0);
                 OnPacketSendFailed?.Invoke(this, seg, TransportError.SocketError);
                 return;
@@ -354,8 +348,8 @@ namespace DuneTransport.Transport
 
             var sentSeg = currentSendingSegment;
             currentSendingSegment = default;
-            sentSeg.Release();
             Interlocked.Exchange(ref _sendInFlight, 0);
+            sentSeg.Release();
             OnPacketSent?.Invoke(this);
         }
 
@@ -390,7 +384,7 @@ namespace DuneTransport.Transport
             }
             catch { }
 
-            IsConnected = false;
+            _isConnected = false;
         }
     }
 }

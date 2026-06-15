@@ -51,7 +51,7 @@ namespace DuneSession.SocketConnectors
 
                 socket?.Dispose();
                 Interlocked.Exchange(ref connectingState, 0);
-
+                OnConnectFailed?.Invoke(SocketError.SocketError);
                 return false;
             }
         }

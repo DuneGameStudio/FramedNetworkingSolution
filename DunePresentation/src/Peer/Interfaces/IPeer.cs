@@ -14,7 +14,9 @@ namespace DunePresentation.Peer.Interfaces
 
         event Action<TransportError>? OnHandlingPacketSendFailed;
 
-        event Action<TransportError>? OnPacketSendFailed;
+        event Action<IPacket, TransportError>? OnPacketSendFailed;
+
+        event Action? OnPacketSent;
 
         bool IsConnected { get; }
 
