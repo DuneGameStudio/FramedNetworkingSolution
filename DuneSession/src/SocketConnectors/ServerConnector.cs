@@ -126,6 +126,7 @@ namespace DuneSession.SocketConnectors
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
+            Interlocked.Exchange(ref isListening, 0);
             acceptEventArgs.Completed -= OnAcceptCompleted;
             socket.Dispose();
             acceptEventArgs.Dispose();

@@ -78,11 +78,15 @@ Maps packet IDs to factory and handler pairs. Registration requires an explicit 
 
 ### Peer
 
-Wires transport, registry, and encryption together. On receive: decrypts (if configured), reads the packet ID, looks up the handler, deserializes the packet, and raises a received event with an invoker callback. The application decides when to invoke the handler.
+Wires transport, registry, and encryption together. Pure methods with no internal event subscriptions — the application wires `peer.Connection.Transport` events and calls Peer methods on its own threads.
 
-On send: reserves a buffer slot, writes the packet header in a post-serialize callback, and sends. On errors, raises the appropriate event — it never auto-disconnects.
+`SerializeAndEncrypt<T>()` reserves a segment, writes fields, the presentation header, and encrypts (if configured). Returns the framed segment for the app to enqueue. Fires `OnSerializeFailed` with a `PacketError` code on failure and returns `default(Segment)`.
 
-`Dispose()` unsubscribes all transport events and disposes the underlying connection, cleaning up the socket.
+`DecryptAndDeserialize(Segment)` decrypts (if configured), reads the packet ID, looks up the registry, deserializes the packet, and releases the segment. Returns `(IPacket, Action<IPacket>)` with the packet and its registered handler. Fires `OnDeserializeFailed` with a `PacketError` code on failure and returns `null`.
+
+`Send(Segment, int)` delegates to `Transport.SendAsync()`.
+
+`Dispose()` disposes the underlying connection. No event unsubscribes — Peer subscribes to nothing.
 
 ### Encryption
 

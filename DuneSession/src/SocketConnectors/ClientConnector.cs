@@ -11,7 +11,7 @@ namespace DuneSession.SocketConnectors
     {
         private Socket? socket;
         private readonly SocketAsyncEventArgs connectEventArgs;
-        private IConnection? connection;
+        private volatile IConnection? connection;
         private volatile int connectingState;
         private int _disposed;
 

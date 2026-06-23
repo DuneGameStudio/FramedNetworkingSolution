@@ -1,28 +1,25 @@
 using System;
+using DunePresentation.Packet;
 using DunePresentation.Packet.Interfaces;
-using DuneTransport.Transport;
+using DuneSession.SocketConnectors.Interface;
+using DuneTransport.BufferManager;
 
 namespace DunePresentation.Peer.Interfaces
 {
     public interface IPeer : IDisposable
     {
-        event Action? OnDisconnected;
-
-        event Action<TransportError>? OnHandlingPacketReceiveFailed;
-
-        event Action<TransportError>? OnPacketReceiveFailed;
-
-        event Action<TransportError>? OnHandlingPacketSendFailed;
-
-        event Action<IPacket, TransportError>? OnPacketSendFailed;
-
-        event Action? OnPacketSent;
+        IConnection Connection { get; }
 
         bool IsConnected { get; }
 
-        void Receive();
+        event Action<PacketError>? OnSerializeFailed;
+        event Action<PacketError>? OnDeserializeFailed;
 
-        void Send<T>(T packet) where T : IPacket;
+        Segment SerializeAndEncrypt<T>(T packet) where T : IPacket;
+
+        (IPacket Packet, Action<IPacket> Handler)? DecryptAndDeserialize(Segment segment);
+
+        void Send(Segment segment, int packetSize);
 
         void DisconnectAsync();
     }

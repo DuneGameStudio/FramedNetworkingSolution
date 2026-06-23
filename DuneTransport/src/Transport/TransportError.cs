@@ -23,12 +23,6 @@ namespace DuneTransport.Transport
         /// <summary>The Transport was disposed while the operation was pending. Reserved for boundary cases.</summary>
         ObjectDisposed,
 
-        /// <summary>The packet registry failed to resolve the requested packet ID or encountered an internal error.</summary>
-        RegistryError,
-
-        /// <summary>Failed to Serialize/Deserialize the packet.</summary>
-        SerializationError,
-
         /// <summary>The socket was disconnected.</summary>
         SocketDisconnected,
 

@@ -1,6 +1,4 @@
 using System;
-using System.Diagnostics;
-using System.Net.Sockets;
 using System.Threading;
 using DunePresentation.Encryption.Interface;
 using DunePresentation.Packet;
@@ -8,8 +6,6 @@ using DunePresentation.Packet.Interfaces;
 using DunePresentation.Peer.Interfaces;
 using DuneSession.SocketConnectors.Interface;
 using DuneTransport.BufferManager;
-using DuneTransport.Transport;
-using DuneTransport.Transport.Interface;
 
 namespace DunePresentation.Peer
 {
@@ -18,132 +14,111 @@ namespace DunePresentation.Peer
         private readonly IConnection _connection;
         private readonly PacketRegistry _packetRegistry;
         private readonly IPacketEncryptor? _encryptor;
-        private IPacket? _currentSendingPacket;
         private int _disposed;
 
+        public IConnection Connection => _connection;
         public bool IsConnected => _connection.IsConnected;
 
-        public event Action? OnDisconnected;
-
-        public event Action<IPacket, Action<IPacket>>? OnPacketReceived;
-        public event Action? OnPacketSent;
-
-        public event Action<TransportError>? OnHandlingPacketReceiveFailed;
-        public event Action<TransportError>? OnPacketReceiveFailed;
-
-        public event Action<TransportError>? OnHandlingPacketSendFailed;
-        public event Action<IPacket, TransportError>? OnPacketSendFailed;
+        public event Action<PacketError>? OnSerializeFailed;
+        public event Action<PacketError>? OnDeserializeFailed;
 
         public Peer(IConnection connection, PacketRegistry packetRegistry, IPacketEncryptor? encryptor = null)
         {
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
             _packetRegistry = packetRegistry ?? throw new ArgumentNullException(nameof(packetRegistry));
             _encryptor = encryptor;
-
-            _connection.Transport.OnPacketReceived += OnPacketReceivedHandler;
-            _connection.Transport.OnPacketSent += OnPacketSentHandler;
-
-            _connection.Transport.OnPacketReceiveFailed += OnPacketReceiveFailedHandler;
-            _connection.Transport.OnPacketSendFailed += OnPacketSendFailedHandler;
-
-            _connection.OnDisconnected += OnDisconnectedHandler;
         }
 
-        public void Receive()
+        public Segment SerializeAndEncrypt<T>(T packet) where T : IPacket
         {
-            _connection.Transport.ReceiveAsync();
-        }
+            ushort packetId = packet.PacketId;
+            IPacketEncryptor? encryptor = _encryptor;
+            Segment reserved = default;
 
-        public void Send<T>(T packet) where T : IPacket
-        {
+            if (!_connection.Transport.TryReserveSendPacket(out Segment seg))
+            {
+                OnSerializeFailed?.Invoke(PacketError.PoolExhausted);
+                return default;
+            }
+
+            seg.Memory = seg.Memory.Slice(PresentationHeader.Size);
+
             try
             {
-                ushort packetId = packet.PacketId;
-                IPacketEncryptor? encryptor = _encryptor;
-
-                if (!packet.Serialize(_connection.Transport, (seg, size) =>
+                if (!packet.Serialize(_connection.Transport, (s, size) =>
                 {
-                    var span = seg.Memory.Span;
+                    var span = s.Memory.Span;
                     PresentationHeader.Write(span, packetId);
 
                     if (encryptor != null)
                         encryptor.Encrypt(span.Slice(0, size), span);
                 }))
                 {
-                    OnHandlingPacketSendFailed?.Invoke(TransportError.SerializationError);
-                    return;
+                    OnSerializeFailed?.Invoke(PacketError.SerializationError);
+                    return default;
                 }
-
-                _currentSendingPacket = packet;
-                _connection.Transport.SendAsync(packet.segment, packet.PacketSize);
+                return packet.segment;
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"Peer.Send | Exception:\n{ex}", "error");
-                OnHandlingPacketSendFailed?.Invoke(TransportError.HandlerFailed);
+                reserved.Release();
+                OnSerializeFailed?.Invoke(PacketError.SerializationError);
+                return default;
             }
         }
 
-        private void OnPacketSendFailedHandler(ITransport transport, Segment segment, TransportError reason)
+        public (IPacket Packet, Action<IPacket> Handler)? DecryptAndDeserialize(Segment segment)
         {
-            var packet = _currentSendingPacket!;
-            _currentSendingPacket = null;
-            segment.Release();
-            OnPacketSendFailed?.Invoke(packet, reason);
-        }
+            var span = segment.Memory.Span;
 
-        private void OnPacketReceivedHandler(ITransport transport, SocketAsyncEventArgs args, Segment segment)
-        {
-            bool segmentOwned = true;
+            // Stage 1: Decrypt
             try
             {
-                var span = segment.Memory.Span;
-
-                if (_encryptor != null)
-                    _encryptor.Decrypt(span, span);
-
-                PresentationHeader.Read(span, out ushort packetId);
-
-                if (!_packetRegistry.TryGetEntry(packetId, out Entry entry))
-                {
-                    OnHandlingPacketReceiveFailed?.Invoke(TransportError.RegistryError);
-                    return;
-                }
-
-                IPacket packet = entry.Factory();
-                packet.segment = segment;
-                packet.PacketSize = span.Length;
-
-                segmentOwned = false;
-                if (!packet.Deserialize())
-                {
-                    OnHandlingPacketReceiveFailed?.Invoke(TransportError.SerializationError);
-                    return;
-                }
-
-                OnPacketReceived?.Invoke(packet, entry.Invoke);
+                _encryptor?.Decrypt(span, span);
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"Peer.OnPacketReceivedHandler | Exception:\n{ex}", "error");
-                OnHandlingPacketReceiveFailed?.Invoke(TransportError.HandlerFailed);
+                OnDeserializeFailed?.Invoke(PacketError.DecryptError);
+                return null;
             }
-            finally
+
+            // Stage 2: Read header
+            ushort packetId;
+            try
             {
-                if (segmentOwned)
-                    segment.Release();
+                PresentationHeader.Read(span, out packetId);
             }
+            catch
+            {
+                OnDeserializeFailed?.Invoke(PacketError.SerializationError);
+                return null;
+            }
+
+            // Stage 3: Registry lookup
+            if (!_packetRegistry.TryGetEntry(packetId, out Entry entry))
+            {
+                segment.Release();
+                OnDeserializeFailed?.Invoke(PacketError.RegistryError);
+                return null;
+            }
+
+            // Stage 4: Factory + deserialize (factory exceptions propagate)
+            IPacket packet = entry.Factory();
+            packet.segment = segment;
+            packet.PacketSize = span.Length;
+
+            if (!packet.Deserialize())
+            {
+                OnDeserializeFailed?.Invoke(PacketError.DeserializeError);
+                return null;
+            }
+
+            return (packet, entry.Invoke);
         }
 
-        private void OnPacketSentHandler(ITransport transport)
+        public void Send(Segment segment, int packetSize)
         {
-            _currentSendingPacket = null;
-            OnPacketSent?.Invoke();
-        }
-
-        private void OnPacketReceiveFailedHandler(ITransport transport, TransportError reason)
-        {
-            OnPacketReceiveFailed?.Invoke(reason);
+            _connection.Transport.SendAsync(segment, packetSize);
         }
 
         public void DisconnectAsync()
@@ -151,20 +126,9 @@ namespace DunePresentation.Peer
             _connection.DisconnectAsync();
         }
 
-        private void OnDisconnectedHandler()
-        {
-            OnDisconnected?.Invoke();
-        }
-
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
-
-            _connection.Transport.OnPacketReceived -= OnPacketReceivedHandler;
-            _connection.Transport.OnPacketReceiveFailed -= OnPacketReceiveFailedHandler;
-            _connection.Transport.OnPacketSendFailed -= OnPacketSendFailedHandler;
-            _connection.Transport.OnPacketSent -= OnPacketSentHandler;
-            _connection.OnDisconnected -= OnDisconnectedHandler;
 
             _connection.Dispose();
         }

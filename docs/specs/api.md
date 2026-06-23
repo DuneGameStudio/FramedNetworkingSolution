@@ -30,6 +30,7 @@ Consumers depend on `DunePresentation`. Lower layers are implementation detail.
 * [`IPeer`](#ipeer)
 * [`IPeerClient`](#ipeerclient)
 * [`IPeerServer`](#ipeerserver)
+* [`PacketError`](#packeterror)
 * [`IPacket`](#ipacket)
 * [`ISegmentManager`](#isegmentmanager)
 * [`PacketRegistry`](#packetregistry)
@@ -219,8 +220,6 @@ enum TransportError
 | `InvalidSegment`        | Caller passed a segment the send buffer cannot resolve.                             |
 | `HandlerFailed`         | `OnPacketReceived` subscriber threw an exception. Segment released on their behalf. |
 | `ObjectDisposed`        | Operation called on disposed Transport.                                             |
-| `RegistryError`         | Packet registry failed to resolve a packet ID. (Presentation layer.)                |
-| `SerializationError`    | Packet serialize/deserialize failed. (Presentation layer.)                          |
 | `SocketDisconnected`    | FIN received or socket not connected.                                               |
 | `ReceiveAlreadyPending` | Reentrant `ReceiveAsync()` call.                                                    |
 | `SendAlreadyPending`    | Reentrant `SendAsync()` call.                                                       |
@@ -408,7 +407,7 @@ Packet dispatch, registration, and encryption. The application's primary entry p
 
 ### `IPeer`
 
-Main handle for a single connection. Wires together Transport, packet registry, and optional encryption. The application sends and receives `IPacket` instances.
+Main handle for a single connection. Provides pure methods for serialization and deserialization — no internal event subscriptions. The application wires `peer.Connection.Transport` events and calls Peer methods on its own threads.
 
 **Namespace:** `DunePresentation.Peer.Interfaces`
 
@@ -418,70 +417,78 @@ interface IPeer : IDisposable
 
 #### Properties
 
-| Property      | Type   | Description                                       |
-| ------------- | ------ | ------------------------------------------------- |
-| `IsConnected` | `bool` | `true` while the underlying connection is active. |
+| Property      | Type         | Description                                                        |
+| ------------- | ------------ | ------------------------------------------------------------------ |
+| `Connection`  | `IConnection` | The underlying connection. Access `Transport` for events and I/O. |
+| `IsConnected` | `bool`       | `true` while the underlying connection is active.                  |
 
 #### Methods
 
-| Method                    | Description                                                                                                                            |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `Send&lt;T&gt;(T packet)` | Serializes the packet, writes the presentation header, encrypts (if configured), and initiates the send. `T` must implement `IPacket`. |
-| `Receive()`               | Arms the receive pipeline. Delegates to `Transport.ReceiveAsync()`.                                                                    |
-| `DisconnectAsync()`       | Graceful disconnect. Delegates to `Connection.DisconnectAsync()`.                                                                      |
-| `Dispose()`               | Unsubscribes all transport events. Disposes the connection.                                                                            |
+| Method                                                  | Returns                                        | Description                                                                                                                           |
+| ------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `SerializeAndEncrypt&lt;T&gt;(T packet)`                | `Segment`                                      | Reserves a segment, writes the presentation header, encrypts (if configured). Returns the framed segment. Fires `OnSerializeFailed` on error. |
+| `DecryptAndDeserialize(Segment segment)`                | `(IPacket Packet, Action&lt;IPacket&gt; Handler)?` | Decrypts, reads packet ID, looks up the registry, deserializes, releases segment. Returns the packet with its handler. Fires `OnDeserializeFailed` on error. |
+| `Send(Segment segment, int packetSize)`                 | `void`                                         | Delegates to `Transport.SendAsync()`.                                                                                                 |
+| `DisconnectAsync()`                                     | `void`                                         | Graceful disconnect. Delegates to `Connection.DisconnectAsync()`.                                                                     |
+| `Dispose()`                                             | `void`                                         | Disposes the connection. No event unsubscribes — Peer subscribes to nothing.                                                          |
 
 #### Events
 
-| Event                           | Signature                                      | Description                                                                                                                                          |
-| ------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OnDisconnected`                | `Action`                                       | Fires when the connection is fully disconnected.                                                                                                     |
-| `OnPacketReceived`              | `Action&lt;IPacket, Action&lt;IPacket&gt;&gt;` | Fires when a packet is received and deserialized. The `Action&lt;IPacket&gt;` is the registered handler — the application decides when to invoke it. |
-| `OnPacketSent`                  | `Action`                                       | Fires when a send completes successfully.                                                                                                            |
-| `OnPacketSendFailed`            | `Action&lt;IPacket, TransportError&gt;`        | Fires when a send fails. The failed `IPacket` is passed to the application. Call `Send(packet)` to retry with a fresh segment.                       |
-| `OnPacketReceiveFailed`         | `Action&lt;TransportError&gt;`                 | Fires when a receive fails.                                                                                                                          |
-| `OnHandlingPacketSendFailed`    | `Action&lt;TransportError&gt;`                 | Fires when Peer's own send handling fails (serialization error or exception).                                                                        |
-| `OnHandlingPacketReceiveFailed` | `Action&lt;TransportError&gt;`                 | Fires when Peer's own receive handling fails (registry error, serialization error, handler exception).                                               |
+| Event                     | Signature                    | Description                                                                                                                               |
+| ------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `OnSerializeFailed`       | `Action&lt;PacketError&gt;`  | Fires when `SerializeAndEncrypt()` fails — pool exhausted, write error, encryptor exception. Returns `default(Segment)`.                          |
+| `OnDeserializeFailed`     | `Action&lt;PacketError&gt;`  | Fires when `DecryptAndDeserialize()` fails — decrypt error, serialization error, registry miss, deserialize failure. Returns `null`. |
 
-**Example — send and receive:**
+**Example — threading model:**
 
 ```C#
-peer.OnPacketReceived += (packet, invoke) =>
+// Wire up once per peer
+peer.OnSerializeFailed += err => { /* log */ };
+peer.OnDeserializeFailed += err => { /* log */ };
+peer.Connection.Transport.OnPacketReceived += (t, args, seg) =>
 {
-    // queue for main loop, or invoke immediately
-    invoke(packet);
+    serializationQueue.Enqueue((peer, seg));
+    t.ReceiveAsync();  // re-arm
 };
+peer.Connection.Transport.ReceiveAsync();  // initial arm
 
-peer.OnPacketSendFailed += (packet, error) =>
-{
-    if (error == TransportError.SocketError)
-        peer.Send(packet);  // retry
-};
+// Serialization thread
+var result = peer.DecryptAndDeserialize(segment);
+if (result != null)
+    processingQueue.Enqueue((result.Value.Packet, result.Value.Handler));
 
-peer.Send(new ChatMessage { Text = "hello" });
-peer.Receive();
+// Serialization thread (send side)
+var seg = peer.SerializeAndEncrypt(new ChatMessage { Text = "hello" });
+if (seg.SegmentIndex != 0)
+    sendQueue.Enqueue((peer, seg, packet.PacketSize));
+
+// Send thread
+peer.Send(segment, packetSize);
 ```
 
-**Example — retry on failure:**
+**> **Segment ownership note:** `SerializeAndEncrypt()` returns `default(Segment)` (index `0`, null memory) on failure. Do not enqueue a default segment — check the return or subscribe to `OnSerializeFailed` before passing to `Send()`. Sending a default segment will hit `TransportError.InvalidSegment` on the send side with no traceable cause.**
+
+**See also:** [`IPacket`](#ipacket), [`PacketError`](#packeterror), [`IConnection`](#iconnection)
+
+***
+
+### `PacketError`
+
+Reason codes surfaced with Peer-level failure events. Each layer handles its own domain of errors — Transport handles I/O, Presentation handles serialization.
+
+**Namespace:** `DunePresentation.Packet`
 
 ```C#
-peer.OnPacketSendFailed += (packet, error) =>
-{
-    switch (error)
-    {
-        case TransportError.SocketError:
-        case TransportError.SendAlreadyPending:
-            peer.Send(packet);  // retry with fresh segment
-            break;
-        case TransportError.ObjectDisposed:
-        case TransportError.SocketDisconnected:
-            // terminal — log and drop
-            break;
-    }
-};
+enum PacketError
 ```
 
-**See also:** [`IPacket`](#ipacket), [`TransportError`](#transporterror)
+| Value                   | Meaning                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| `PoolExhausted`         | Underlying segment pool had no free segment when one was needed during serialization. |
+| `SerializationError`    | Serialization failed (buffer write or encryptor exception during `SerializeAndEncrypt`). |
+| `DecryptError`          | Decrypt failed (encryptor threw during `DecryptAndDeserialize`).                     |
+| `DeserializeError`      | Deserialize failed (`packet.ReadFieldsFromBuffer` returned false during `DecryptAndDeserialize`). |
+| `RegistryError`         | The packet registry failed to resolve the received packet ID.                        |
 
 ***
 
@@ -529,8 +536,18 @@ registry.RegisterHandler&lt;ChatMessage&gt;(0x0001, HandleChat);
 var client = new PeerClient(registry);
 client.OnPeerConnected += peer =>
 {
-    peer.Send(new ChatMessage { Text = "hi" });
-    peer.Receive();
+    // Wire up transport events
+    peer.Connection.Transport.OnPacketReceived += (t, args, seg) =>
+    {
+        var result = peer.DecryptAndDeserialize(seg);
+        if (result != null)
+        {
+            var (packet, handler) = result.Value;
+            handler(packet);  // or enqueue for processing thread
+        }
+        t.ReceiveAsync();  // re-arm
+    };
+    peer.Connection.Transport.ReceiveAsync();  // initial arm
 };
 client.ConnectAsync("127.0.0.1", 5000);
 ```
@@ -712,18 +729,25 @@ interface IPacketEncryptor
 ### Send Path
 
 ```
-Application
-  peer.Send&lt;T&gt;(packet)
-    → packet.Serialize(transport, callback)
-      → TryReserveSendPacket(out seg)   // rent segment
-      → WriteFieldsToBuffer()           // app writes payload
-      → PresentationHeader.Write()      // write packet ID
-      → encryptor?.Encrypt()            // optional
+Serialization thread
+  peer.SerializeAndEncrypt&lt;T&gt;(packet)
+    → TryReserveSendPacket(out seg)   // rent segment
+    → WriteFieldsToBuffer()           // app writes payload
+    → PresentationHeader.Write()      // write packet ID
+    → encryptor?.Encrypt()            // optional
+    → returns Segment (owned by app)
+  → app enqueues (peer, segment, packetSize)
+
+Send thread
+  peer.Send(segment, packetSize)
     → Transport.SendAsync(seg, size)
       → prepend 2-byte length header
       → socket.SendAsync()
         → success: Release(), OnPacketSent
-        → failure: OnPacketSendFailed(segment ownership → Peer → app)
+        → failure: OnPacketSendFailed(segment ownership → app)
+
+> If SerializeAndEncrypt fails, OnSerializeFailed fires and default(Segment) is returned.
+> Do not enqueue a default segment — check SegmentIndex != 0 before enqueueing.
 ```
 
 ### Receive Path
@@ -734,15 +758,20 @@ Socket data arrives
     → read 2-byte header (payload length)
     → rent payload segment
     → read payload bytes
-    → OnPacketReceived (segment ownership → Peer)
-  → Peer.OnPacketReceivedHandler
-    → decrypt?.Decrypt()
-    → PresentationHeader.Read(packetId)
-    → registry.TryGetEntry(packetId)
+    → OnPacketReceived (segment ownership → app)
+  → app enqueues (peer, segment)
+
+Serialization thread
+  peer.DecryptAndDeserialize(segment)
+    → decrypt?.Decrypt()               // fires OnDeserializeFailed(DecryptError) on error
+    → PresentationHeader.Read(packetId) // fires OnDeserializeFailed(SerializationError) on error
+    → registry.TryGetEntry(packetId)   // fires OnDeserializeFailed(RegistryError) on miss, segment released
     → packet = factory()
-    → packet.Deserialize() → ReadFieldsFromBuffer
-    → OnPacketReceived(packet, invoke)
-  → Application
-    → invoke(packet)  // or queue for later
+    → packet.Deserialize()             // fires OnDeserializeFailed(DeserializeError) on failure
+    → returns (packet, handler)        // segment released by Deserialize
+  → app enqueues (packet, handler)
+
+Processing thread
+  handler(packet)  // invoke the registered handler
 ```
 
