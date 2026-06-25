@@ -8,33 +8,79 @@ using DuneTransport.Transport.Interface;
 
 namespace DuneTransport.Transport
 {
+    /// <summary>
+    /// Asynchronous socket transport with two-phase (header/payload) receive and length-prefixed send.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Wraps a connected <see cref="Socket"/> and provides an event-based API for
+    /// sending and receiving framed packets. Each packet is framed with a 2-byte
+    /// little-endian length prefix.
+    /// </para>
+    /// <para>
+    /// <b>Receive flow:</b> Reads the 2-byte header first, allocates a correctly-sized
+    /// payload segment, then receives the payload. Delivers the complete segment to
+    /// the subscriber via <see cref="OnPacketReceived"/>.
+    /// </para>
+    /// <para>
+    /// <b>Send flow:</b> Application reserves a segment via <see cref="TryReserveSendPacket"/>,
+    /// writes payload data, calls <see cref="SendAsync"/> which prepends the length header
+    /// and transmits.
+    /// </para>
+    /// <para>
+    /// Only one send and one receive may be in flight simultaneously. Operations are
+    /// guarded with <see cref="Interlocked.CompareExchange"/> flags.
+    /// </para>
+    /// </remarks>
     public class Transport : ITransport
     {
+        /// <summary>The size of the length-prefixed header in bytes (2 bytes, little-endian).</summary>
         private const int HeaderSize = 2;
 
         private readonly Socket socket;
 
+        /// <summary>Segment pool for receiving data. Segments are leased during receive operations.</summary>
         private SegmentedBuffer receiveBuffer { get; }
+
+        /// <summary>Segment pool for sending data. Segments are leased for outgoing packets.</summary>
         private SegmentedBuffer sendBuffer { get; }
 
+        /// <summary>Tracks whether we are currently receiving a header or payload.</summary>
         private enum ReceivePhase { Header, Payload }
 
+        /// <summary>The segment currently being filled during an active receive operation.</summary>
         private Segment currentReceivingSegment;
+
+        /// <summary>The segment currently being transmitted during an active send operation.</summary>
         private Segment currentSendingSegment;
 
+        /// <summary>Current phase of the multi-part receive operation.</summary>
         private ReceivePhase phase;
+
+        /// <summary>Bytes received in the current phase.</summary>
         private int receivedBytes;
+
+        /// <summary>Total bytes expected for the current phase.</summary>
         private int expectedBytes;
 
         private readonly SocketAsyncEventArgs sendEventArgs;
         private readonly SocketAsyncEventArgs receiveEventArgs;
 
-        private int _disposed;        // 0/1 via Interlocked.Exchange
-        private int _sendInFlight;    // 0/1 via Interlocked.CompareExchange
-        private int _receiveInFlight; // 0/1 via Interlocked.CompareExchange
+        /// <summary>Dispose guard: 0 = not disposed, 1 = disposed. Accessed via <see cref="Volatile.Read"/>.</summary>
+        private int _disposed;
+
+        /// <summary>Send in-flight guard: 0 = available, 1 = in flight. Accessed via <see cref="Interlocked.CompareExchange"/>.</summary>
+        private int _sendInFlight;
+
+        /// <summary>Receive in-flight guard: 0 = available, 1 = in flight. Accessed via <see cref="Interlocked.CompareExchange"/>.</summary>
+        private int _receiveInFlight;
 
         private volatile bool _isConnected = true;
+
+        /// <inheritdoc />
         public bool IsConnected => _isConnected;
+
+        /// <inheritdoc />
         public bool IsDisposed => Volatile.Read(ref _disposed) == 1;
 
         public event Action<ITransport>? OnPacketSent;
@@ -43,6 +89,21 @@ namespace DuneTransport.Transport
         public event Action<ITransport, SocketAsyncEventArgs, Segment>? OnPacketReceived;
         public event Action<ITransport, TransportError>? OnPacketReceiveFailed;
 
+        /// <summary>
+        /// Creates a new transport for the given socket.
+        /// </summary>
+        /// <param name="socket">An already-connected socket to wrap.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="socket"/> is null.</exception>
+        /// <remarks>
+        /// <para>
+        /// Initializes separate segment pools for sending and receiving. Registers
+        /// async I/O completion handlers on <see cref="SocketAsyncEventArgs"/> instances.
+        /// </para>
+        /// <para>
+        /// The socket should be connected before calling this constructor.
+        /// Call <see cref="Dispose"/> to release resources when the transport is no longer needed.
+        /// </para>
+        /// </remarks>
         public Transport(Socket socket)
         {
             this.socket = socket ?? throw new ArgumentNullException(nameof(socket));
@@ -57,6 +118,7 @@ namespace DuneTransport.Transport
             receiveEventArgs.Completed += OnPacketReceivedEventHandler;
         }
 
+        /// <inheritdoc cref="ITransport.ReceiveAsync"/>
         public void ReceiveAsync()
         {
             if (Volatile.Read(ref _disposed) == 1)
@@ -90,6 +152,19 @@ namespace DuneTransport.Transport
             IssueReceive();
         }
 
+        /// <summary>
+        /// Issues the next socket receive operation, handling synchronous completions inline.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Enters a loop where synchronous completions are processed immediately without
+        /// returning to the caller. This avoids thread pool overhead for fast connections.
+        /// </para>
+        /// <para>
+        /// On any error (socket exception, dispose race), the current segment is released
+        /// and the in-flight flag is cleared before returning.
+        /// </para>
+        /// </remarks>
         private void IssueReceive()
         {
             receiveEventArgs.SetBuffer(
@@ -146,6 +221,23 @@ namespace DuneTransport.Transport
             }
         }
 
+        /// <summary>
+        /// Processes a completed receive operation, handling the two-phase (header/payload) receive pipeline.
+        /// </summary>
+        /// <param name="onReceived">The completed socket async event arguments.</param>
+        /// <returns><c>true</c> if more data should be received (partial phase); otherwise <c>false</c>.</returns>
+        /// <remarks>
+        /// <para>
+        /// Two-phase receive:
+        /// <list type="number">
+        ///   <item><b>Header phase:</b> Reads 2 bytes (little-endian payload length). Validates length, reserves payload segment.</item>
+        ///   <item><b>Payload phase:</b> Reads the declared payload length. On completion, slices segment and fires <see cref="OnPacketReceived"/>.</item>
+        /// </list>
+        /// </para>
+        /// <para>
+        /// Early exits: dispose race (silent release), socket error, graceful close (FIN).
+        /// </para>
+        /// </remarks>
         private bool ProcessReceive(SocketAsyncEventArgs onReceived)
         {
             // Dispose raced with this callback. Release and exit silently.
@@ -251,6 +343,7 @@ namespace DuneTransport.Transport
             return false;
         }
 
+        /// <inheritdoc cref="ITransport.TryReserveSendPacket(out Segment)"/>
         public bool TryReserveSendPacket(out Segment segment)
         {
             if (Volatile.Read(ref _disposed) == 1)
@@ -265,6 +358,7 @@ namespace DuneTransport.Transport
             return true;
         }
 
+        /// <inheritdoc cref="ITransport.SendAsync(Segment, int)"/>
         public void SendAsync(Segment packet, int packetSize)
         {
             if (Volatile.Read(ref _disposed) == 1)
@@ -325,6 +419,16 @@ namespace DuneTransport.Transport
             ProcessSend(e);
         }
 
+        /// <summary>
+        /// Processes a completed send operation.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// On socket error: fires <see cref="OnPacketSendFailed"/> with the segment (ownership transfers to subscriber).
+        /// On success: releases the segment, fires <see cref="OnPacketSent"/>.
+        /// On dispose race: silently releases the segment and returns.
+        /// </para>
+        /// </remarks>
         private void ProcessSend(SocketAsyncEventArgs onSent)
         {
             // Dispose raced with this callback. Release and exit silently.
@@ -353,6 +457,28 @@ namespace DuneTransport.Transport
             OnPacketSent?.Invoke(this);
         }
 
+        /// <summary>
+        /// Releases all resources held by this transport.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Idempotent: calling <see cref="Dispose"/> multiple times is safe.
+        /// </para>
+        /// <para>
+        /// Releases any in-flight segments back to their pools:
+        /// <list type="bullet">
+        ///   <item>Receiving segment (if <see cref="_receiveInFlight"/> is set)</item>
+        ///   <item>Sending segment (if <see cref="_sendInFlight"/> is set)</item>
+        /// </list>
+        /// </para>
+        /// <para>
+        /// Unregisters async I/O completion handlers and disposes <see cref="SocketAsyncEventArgs"/> instances.
+        /// </para>
+        /// <para>
+        /// Does NOT close the underlying socket — that is the responsibility of the caller
+        /// (typically <see cref="DuneSession.SocketConnectors.Connection"/>).
+        /// </para>
+        /// </remarks>
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1)

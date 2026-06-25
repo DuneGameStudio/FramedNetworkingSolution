@@ -4,11 +4,39 @@ using DuneTransport.BufferManager;
 
 namespace DuneTransport.Transport.Interface
 {
+    /// <summary>
+    /// Asynchronous socket transport with length-prefixed framing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Manages the raw socket I/O for sending and receiving packets. Uses a 2-byte
+    /// little-endian length prefix for framing. Only one send and one receive may be
+    /// in flight simultaneously — attempting a second operation while one is pending
+    /// fires the appropriate error event.
+    /// </para>
+    /// <para>
+    /// Segment ownership transfers to event subscribers:
+    /// <list type="bullet">
+    ///   <item><see cref="OnPacketReceived"/> — subscriber receives the segment, must release.</item>
+    ///   <item><see cref="OnPacketSendFailed"/> — subscriber receives the segment, decides retry or release.</item>
+    /// </list>
+    /// </para>
+    /// </remarks>
     public interface ITransport : IDisposable
     {
+        /// <summary>Gets whether the underlying socket is currently connected.</summary>
         bool IsConnected { get; }
+
+        /// <summary>Gets whether this transport has been disposed.</summary>
         bool IsDisposed { get; }
 
+        /// <summary>
+        /// Raised when a packet send completes successfully.
+        /// </summary>
+        /// <remarks>
+        /// The segment has already been released back to the pool. No segment is passed
+        /// to the subscriber — the event signals send completion only.
+        /// </remarks>
         event Action<ITransport>? OnPacketSent;
 
         /// <summary>
@@ -63,7 +91,43 @@ namespace DuneTransport.Transport.Interface
         /// </remarks>
         void SendAsync(Segment packet, int packetSize);
 
+        /// <summary>
+        /// Begins an asynchronous receive operation.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Only one receive may be in flight at a time. If a previous receive has not
+        /// yet completed (via <see cref="OnPacketReceived"/> or
+        /// <see cref="OnPacketReceiveFailed"/>), calling this method again will fail
+        /// with <c>TransportError.ReceiveAlreadyPending</c>.
+        /// </para>
+        /// <para>
+        /// On success, <see cref="OnPacketReceived"/> fires with the complete packet segment.
+        /// On failure, <see cref="OnPacketReceiveFailed"/> fires with the error code.
+        /// </para>
+        /// </remarks>
         void ReceiveAsync();
+
+        /// <summary>
+        /// Attempts to reserve a segment from the send buffer for preparing a packet.
+        /// </summary>
+        /// <param name="segment">
+        /// When this method returns, contains the reserved segment if the operation succeeded;
+        /// otherwise contains a default <see cref="Segment"/>. The memory slice is pre-sliced
+        /// past the header so the caller writes directly into the payload area.
+        /// </param>
+        /// <returns><c>true</c> if a segment was successfully reserved; otherwise <c>false</c>.</returns>
+        /// <remarks>
+        /// <para>
+        /// The reserved segment memory is sliced to skip the 2-byte length header.
+        /// The caller writes packet data directly into <paramref name="segment"/>, sets
+        /// the packet size, then calls <see cref="SendAsync"/> to transmit.
+        /// </para>
+        /// <para>
+        /// If the send fails (<see cref="OnPacketSendFailed"/>), segment ownership transfers
+        /// to the subscriber. If the send succeeds, the segment is automatically released.
+        /// </para>
+        /// </remarks>
         bool TryReserveSendPacket(out Segment segment);
     }
 }

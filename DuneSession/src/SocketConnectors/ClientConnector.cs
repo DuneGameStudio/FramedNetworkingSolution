@@ -7,25 +7,45 @@ using DuneSession.SocketConnectors.Interface;
 
 namespace DuneSession.SocketConnectors
 {
+    /// <summary>
+    /// Asynchronous TCP client connector implementation.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Manages the socket lifecycle for outbound connections. Uses an in-flight guard
+    /// to prevent simultaneous connection attempts.
+    /// </para>
+    /// </remarks>
     public class ClientConnector : IClientConnector
     {
         private Socket? socket;
         private readonly SocketAsyncEventArgs connectEventArgs;
         private volatile IConnection? connection;
+        /// <summary>Connection attempt in-flight guard: 0 = idle, 1 = connecting.</summary>
         private volatile int connectingState;
+        /// <summary>Dispose guard: 0 = active, 1 = disposed.</summary>
         private int _disposed;
 
+        /// <inheritdoc />
         public bool IsConnected => connection?.IsConnected ?? false;
 
         public event Action<IConnection>? OnConnected;
         public event Action<SocketError>? OnConnectFailed;
 
+        /// <summary>
+        /// Creates a new client connector.
+        /// </summary>
+        /// <remarks>
+        /// Allocates a <see cref="SocketAsyncEventArgs"/> for connection operations.
+        /// Call <see cref="Dispose"/> when no longer needed.
+        /// </remarks>
         public ClientConnector()
         {
             connectEventArgs = new SocketAsyncEventArgs();
             connectEventArgs.Completed += OnConnectCompleted;
         }
 
+        /// <inheritdoc />
         public bool ConnectAsync(string address, int port)
         {
             if (IsConnected)
@@ -61,6 +81,13 @@ namespace DuneSession.SocketConnectors
             ProcessConnect(e);
         }
 
+        /// <summary>
+        /// Processes a completed connection attempt.
+        /// </summary>
+        /// <remarks>
+        /// On success: wraps the socket in a <see cref="Connection"/> and fires <see cref="OnConnected"/>.
+        /// On failure: disposes the socket and fires <see cref="OnConnectFailed"/>.
+        /// </remarks>
         private void ProcessConnect(SocketAsyncEventArgs e)
         {
             if (Interlocked.Exchange(ref connectingState, 0) != 1)

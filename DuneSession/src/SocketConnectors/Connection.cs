@@ -8,20 +8,47 @@ using DuneTransport.Transport.Interface;
 
 namespace DuneSession.SocketConnectors
 {
+    /// <summary>
+    /// An active socket connection with an embedded <see cref="ITransport"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Wraps a connected socket and provides the <see cref="Transport"/> property for
+    /// sending and receiving data. Monitors the transport for <c>SocketDisconnected</c>
+    /// and triggers <see cref="OnDisconnected"/> automatically.
+    /// </para>
+    /// </remarks>
     public class Connection : IConnection
     {
         private readonly Socket socket;
+        /// <summary>Connection state flag: 1 = connected, 0 = disconnected.</summary>
         private volatile int connectedState;
+        /// <summary>Disconnect in-flight guard: 0 = idle, 1 = disconnecting.</summary>
         private volatile int disconnectingState;
 
+        /// <inheritdoc />
         public bool IsConnected => connectedState == 1 && Transport.IsConnected;
+
+        /// <inheritdoc />
         public ITransport Transport { get; }
 
         public event Action? OnDisconnected;
 
         private readonly SocketAsyncEventArgs disconnectAsyncSocketAsyncEventArgs;
+        /// <summary>Dispose guard: 0 = active, 1 = disposed.</summary>
         private int _disposed;
 
+        /// <summary>
+        /// Creates a new connection wrapping the given socket.
+        /// </summary>
+        /// <param name="socket">An already-connected socket.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="socket"/> is null.</exception>
+        /// <remarks>
+        /// <para>
+        /// Creates a <see cref="Transport"/> for the socket and subscribes to
+        /// <see cref="ITransport.OnPacketReceiveFailed"/> to detect remote disconnects.
+        /// </para>
+        /// </remarks>
         public Connection(Socket socket)
         {
             this.socket = socket ?? throw new ArgumentNullException(nameof(socket));
@@ -34,6 +61,7 @@ namespace DuneSession.SocketConnectors
             disconnectAsyncSocketAsyncEventArgs.Completed += OnDisconnect;
         }
 
+        /// <inheritdoc />
         public void DisconnectAsync()
         {
             if (Volatile.Read(ref _disposed) == 1)
@@ -53,6 +81,7 @@ namespace DuneSession.SocketConnectors
             }
         }
 
+        /// <summary>Handles disconnect completion. Transitions to disconnected and fires <see cref="OnDisconnected"/>.</summary>
         private void OnDisconnect(object? sender, SocketAsyncEventArgs e)
         {
             if (Interlocked.Exchange(ref connectedState, 0) != 1)
@@ -62,6 +91,9 @@ namespace DuneSession.SocketConnectors
             OnDisconnected?.Invoke();
         }
 
+        /// <summary>
+        /// Handles transport-level receive failures. Auto-disconnects on <c>SocketDisconnected</c>.
+        /// </summary>
         private void OnTransportReceiveFailed(ITransport transport, TransportError reason)
         {
             if (reason != TransportError.SocketDisconnected)
@@ -74,6 +106,15 @@ namespace DuneSession.SocketConnectors
             OnDisconnected?.Invoke();
         }
 
+        /// <summary>
+        /// Releases all resources held by this connection.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Unsubscribes from transport events, disposes the transport, and closes the socket.
+        /// Idempotent: calling multiple times is safe.
+        /// </para>
+        /// </remarks>
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1) return;

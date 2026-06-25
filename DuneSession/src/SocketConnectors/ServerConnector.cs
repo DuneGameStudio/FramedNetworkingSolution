@@ -7,14 +7,26 @@ using DuneSession.SocketConnectors.Interface;
 
 namespace DuneSession.SocketConnectors
 {
+    /// <summary>
+    /// Asynchronous TCP server connector implementation.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Manages the listening socket lifecycle. Supports one-shot accept: after each
+    /// accepted connection, the application must call <see cref="AcceptConnection"/> again.
+    /// </para>
+    /// </remarks>
     public class ServerConnector : IServerConnector
     {
         private readonly Socket socket;
         private readonly SocketAsyncEventArgs acceptEventArgs;
 
+        /// <summary>Listening state flag: 0 = stopped, 1 = listening.</summary>
         private volatile int isListening;
+        /// <summary>Dispose guard: 0 = active, 1 = disposed.</summary>
         private int _disposed;
 
+        /// <inheritdoc />
         public bool IsListening => isListening == 1;
 
         public event Action<IConnection>? OnClientConnected;
@@ -26,6 +38,7 @@ namespace DuneSession.SocketConnectors
         /// </summary>
         private const int ListenBacklog = 128;
 
+        /// <summary>Creates a new server connector.</summary>
         public ServerConnector()
         {
             socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -34,6 +47,7 @@ namespace DuneSession.SocketConnectors
             acceptEventArgs.Completed += OnAcceptCompleted;
         }
 
+        /// <inheritdoc />
         public void StartListening(string address, int port)
         {
             try
@@ -59,6 +73,7 @@ namespace DuneSession.SocketConnectors
             Debug.WriteLine($"Server started listening on {address}:{port}", "log");
         }
 
+        /// <inheritdoc />
         public void StopListening()
         {
             if (Interlocked.Exchange(ref isListening, 0) != 1)
@@ -75,6 +90,7 @@ namespace DuneSession.SocketConnectors
             }
         }
 
+        /// <inheritdoc />
         public void AcceptConnection()
         {
             if (!IsListening)
@@ -106,6 +122,13 @@ namespace DuneSession.SocketConnectors
             ProcessAccept(e);
         }
 
+        /// <summary>
+        /// Processes a completed accept operation.
+        /// </summary>
+        /// <remarks>
+        /// On success: wraps the accepted socket in a <see cref="Connection"/> and fires <see cref="OnClientConnected"/>.
+        /// On failure: fires <see cref="OnAcceptFailed"/> with the socket error code.
+        /// </remarks>
         private void ProcessAccept(SocketAsyncEventArgs e)
         {
             if (!IsListening)

@@ -9,19 +9,42 @@ using DuneSession.SocketConnectors.Interface;
 
 namespace DunePresentation.Peer
 {
+    /// <summary>
+    /// Server-side peer factory — listens for and accepts connections, producing <see cref="IPeer"/> instances.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Wraps a <see cref="IServerConnector"/> with packet registry and optional encryption.
+    /// On each accepted connection, creates a <see cref="Peer"/> and fires <see cref="OnPeerConnected"/>.
+    /// </para>
+    /// <para>
+    /// Uses an encryptor factory pattern: the factory is invoked per-connection, allowing
+    /// each peer to have independent encryption state.
+    /// </para>
+    /// </remarks>
     public sealed class PeerServer : IPeerServer
     {
         private readonly PacketRegistry _packetRegistry;
+        /// <summary>Factory to create per-connection encryptors (nullable).</summary>
         private readonly Func<IPacketEncryptor>? _encryptorFactory;
         private readonly IServerConnector _serverConnector;
 
+        /// <summary>Dispose guard: 0 = active, 1 = disposed.</summary>
         private int _disposed;
 
+        /// <inheritdoc />
         public bool IsListening => _serverConnector.IsListening;
 
         public event Action<IPeer>? OnPeerConnected;
         public event Action<SocketError>? OnAcceptFailed;
 
+        /// <summary>
+        /// Creates a new peer server.
+        /// </summary>
+        /// <param name="packetRegistry">Registry for incoming packet handler lookup.</param>
+        /// <param name="encryptorFactory">Optional factory invoked per-connection to create encryptors.</param>
+        /// <param name="server">Optional connector (creates a <see cref="ServerConnector"/> if null).</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="packetRegistry"/> is null.</exception>
         public PeerServer(PacketRegistry packetRegistry, Func<IPacketEncryptor>? encryptorFactory = null, IServerConnector? server = null)
         {
             _packetRegistry = packetRegistry ?? throw new ArgumentNullException(nameof(packetRegistry));
@@ -32,15 +55,19 @@ namespace DunePresentation.Peer
             _serverConnector.OnAcceptFailed += HandleAcceptFailed;
         }
 
+        /// <inheritdoc />
         public void StartListening(string address, int port)
             => _serverConnector.StartListening(address, port);
 
+        /// <inheritdoc />
         public void StopListening()
             => _serverConnector.StopListening();
 
+        /// <inheritdoc />
         public void AcceptConnection()
             => _serverConnector.AcceptConnection();
 
+        /// <summary>Creates a <see cref="Peer"/> for an accepted connection and fires <see cref="OnPeerConnected"/>.</summary>
         private void HandleClientConnected(IConnection connection)
         {
             IPacketEncryptor? encryptor = _encryptorFactory?.Invoke();
@@ -48,9 +75,13 @@ namespace DunePresentation.Peer
             OnPeerConnected?.Invoke(peer);
         }
 
+        /// <summary>Forwards accept failures to <see cref="OnAcceptFailed"/>.</summary>
         private void HandleAcceptFailed(SocketError error)
             => OnAcceptFailed?.Invoke(error);
 
+        /// <summary>
+        /// Unsubscribes from connector events and releases the underlying server. Idempotent.
+        /// </summary>
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
