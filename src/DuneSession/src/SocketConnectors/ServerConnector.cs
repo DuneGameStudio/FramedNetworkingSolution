@@ -20,6 +20,7 @@ namespace DuneSession.SocketConnectors
     {
         private readonly Socket socket;
         private readonly SocketAsyncEventArgs acceptEventArgs;
+        private readonly int _listenBacklog;
 
         /// <summary>Listening state flag: 0 = stopped, 1 = listening.</summary>
         private volatile int isListening;
@@ -33,14 +34,20 @@ namespace DuneSession.SocketConnectors
         public event Action<SocketError>? OnAcceptFailed;
 
         /// <summary>
-        /// Listen backlog. Linux default somaxconn is 128; Windows caps at 511.
-        /// 128 is the safe cross-platform default.
+        /// Creates a new server connector with the default listen backlog (128).
         /// </summary>
-        private const int ListenBacklog = 128;
+        public ServerConnector() : this(128) { }
 
-        /// <summary>Creates a new server connector.</summary>
-        public ServerConnector()
+        /// <summary>
+        /// Creates a new server connector with a custom listen backlog.
+        /// </summary>
+        /// <param name="listenBacklog">Maximum length of the pending connections queue. Must be > 0.</param>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="listenBacklog"/> is less than 1.</exception>
+        public ServerConnector(int listenBacklog)
         {
+            if (listenBacklog < 1) throw new ArgumentOutOfRangeException(nameof(listenBacklog));
+            _listenBacklog = listenBacklog;
+
             socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
             acceptEventArgs = new SocketAsyncEventArgs();
@@ -50,18 +57,10 @@ namespace DuneSession.SocketConnectors
         /// <inheritdoc />
         public void StartListening(string address, int port)
         {
-            try
-            {
-                IPEndPoint endPoint = new IPEndPoint(IPAddress.Parse(address), port);
-
-                socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
-                socket.Bind(endPoint);
-                socket.Listen(ListenBacklog);
-            }
-            catch
-            {
-                throw;
-            }
+            IPEndPoint endPoint = new IPEndPoint(IPAddress.Parse(address), port);
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
+            socket.Bind(endPoint);
+            socket.Listen(_listenBacklog);
 
             if (Interlocked.Exchange(ref isListening, 1) != 0)
             {

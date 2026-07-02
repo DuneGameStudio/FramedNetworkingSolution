@@ -23,7 +23,7 @@ namespace DunePresentation.Peer
         private readonly IConnection _connection;
         private readonly PacketRegistry _packetRegistry;
         private readonly IPacketEncryptor? _encryptor;
-        /// <summary>Dispose guard: 0 = active, 1 = disposed.</summary>
+        /// <summary>Disposed</summary>
         private int _disposed;
 
         /// <inheritdoc />
@@ -54,38 +54,20 @@ namespace DunePresentation.Peer
         {
             ushort packetId = packet.PacketId;
             IPacketEncryptor? encryptor = _encryptor;
-            Segment reserved = default;
 
-            if (!_connection.Transport.TryReserveSendPacket(out Segment seg))
+            if (!packet.Serialize(_connection.Transport, (s, size) =>
+            {
+                var span = s.Memory.Span;
+                PresentationHeader.Write(span, packetId);
+
+                if (encryptor != null)
+                    encryptor.Encrypt(span.Slice(0, size), span);
+            }))
             {
                 OnSerializeFailed?.Invoke(PacketError.PoolExhausted);
                 return default;
             }
-
-            seg.Memory = seg.Memory.Slice(PresentationHeader.Size);
-
-            try
-            {
-                if (!packet.Serialize(_connection.Transport, (s, size) =>
-                {
-                    var span = s.Memory.Span;
-                    PresentationHeader.Write(span, packetId);
-
-                    if (encryptor != null)
-                        encryptor.Encrypt(span.Slice(0, size), span);
-                }))
-                {
-                    OnSerializeFailed?.Invoke(PacketError.SerializationError);
-                    return default;
-                }
-                return packet.segment;
-            }
-            catch
-            {
-                reserved.Release();
-                OnSerializeFailed?.Invoke(PacketError.SerializationError);
-                return default;
-            }
+            return packet.segment;
         }
 
         /// <inheritdoc />
@@ -100,6 +82,7 @@ namespace DunePresentation.Peer
             }
             catch
             {
+                segment.Release();
                 OnDeserializeFailed?.Invoke(PacketError.DecryptError);
                 return null;
             }
@@ -112,6 +95,7 @@ namespace DunePresentation.Peer
             }
             catch
             {
+                segment.Release();
                 OnDeserializeFailed?.Invoke(PacketError.SerializationError);
                 return null;
             }
@@ -129,6 +113,9 @@ namespace DunePresentation.Peer
             packet.segment = segment;
             packet.PacketSize = span.Length;
 
+            // packet.Deserialize() internally calls ISegmentManager.Deserialize() which
+            // ALWAYS releases the segment (regardless of success/failure).
+            // Do NOT call segment.Release() again here — that would be a double-release.
             if (!packet.Deserialize())
             {
                 OnDeserializeFailed?.Invoke(PacketError.DeserializeError);

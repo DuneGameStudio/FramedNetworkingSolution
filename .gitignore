@@ -35,6 +35,7 @@ obj/
 *.pdb.meta
 *.mdb.meta
 *.meta
+*.DS_Store
 
 ### Windows ###
 # Windows thumbnail cache files

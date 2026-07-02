@@ -1,5 +1,0 @@
-﻿<Solution>
-	<Project Path="DunePresentation/DunePresentation.csproj" />
-	<Project Path="DuneSession\DuneSession.csproj" />
-	<Project Path="DuneTransport\DuneTransport.csproj" />
-</Solution>

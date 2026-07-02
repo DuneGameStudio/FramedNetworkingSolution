@@ -366,11 +366,13 @@ namespace DuneTransport.Transport
                 OnPacketSendFailed?.Invoke(this, packet, TransportError.ObjectDisposed);
                 return;
             }
+
             if (!IsConnected)
             {
                 OnPacketSendFailed?.Invoke(this, packet, TransportError.SocketDisconnected);
                 return;
             }
+
             if (Interlocked.CompareExchange(ref _sendInFlight, 1, 0) != 0)
             {
                 OnPacketSendFailed?.Invoke(this, packet, TransportError.SendAlreadyPending);
@@ -380,6 +382,7 @@ namespace DuneTransport.Transport
             if (!sendBuffer.GetRegisteredMemory(packet.SegmentIndex, packetSize + HeaderSize, out Memory<byte> memory))
             {
                 Interlocked.Exchange(ref _sendInFlight, 0);
+                packet.Release();
                 OnPacketSendFailed?.Invoke(this, packet, TransportError.InvalidSegment);
                 return;
             }

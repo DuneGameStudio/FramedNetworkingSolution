@@ -65,10 +65,22 @@ namespace DuneSession.SocketConnectors
 
                 return true;
             }
-            catch (Exception e)
+            catch (SocketException)
             {
-                Debug.WriteLine($"ConnectAsync Exception {e}");
-
+                socket?.Dispose();
+                Interlocked.Exchange(ref connectingState, 0);
+                OnConnectFailed?.Invoke(SocketError.SocketError);
+                return false;
+            }
+            catch (ObjectDisposedException)
+            {
+                socket?.Dispose();
+                Interlocked.Exchange(ref connectingState, 0);
+                OnConnectFailed?.Invoke(SocketError.SocketError);
+                return false;
+            }
+            catch (FormatException)
+            {
                 socket?.Dispose();
                 Interlocked.Exchange(ref connectingState, 0);
                 OnConnectFailed?.Invoke(SocketError.SocketError);
