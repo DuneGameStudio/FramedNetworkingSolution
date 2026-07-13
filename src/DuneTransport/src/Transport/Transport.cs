@@ -83,10 +83,16 @@ namespace DuneTransport.Transport
         /// <inheritdoc />
         public bool IsDisposed => Volatile.Read(ref _disposed) == 1;
 
+        /// <inheritdoc />
+        public bool ReceiveArmed => _receiveInFlight == 1;
+
+        /// <inheritdoc />
+        public bool SendArmed => _sendInFlight == 1;
+
         public event Action<ITransport>? OnPacketSent;
         public event Action<ITransport, Segment, TransportError>? OnPacketSendFailed;
 
-        public event Action<ITransport, SocketAsyncEventArgs, Segment>? OnPacketReceived;
+        public event Action<ITransport, Segment>? OnPacketReceived;
         public event Action<ITransport, TransportError>? OnPacketReceiveFailed;
 
         /// <summary>
@@ -319,22 +325,26 @@ namespace DuneTransport.Transport
             // Payload complete. Slice to actual payload length.
             currentReceivingSegment.Memory = currentReceivingSegment.Memory.Slice(0, expectedBytes);
 
-            // Clear flag BEFORE invoke so the subscriber can call ReceiveAsync from the handler.
-            Interlocked.Exchange(ref _receiveInFlight, 0);
-
-            // Hand off ownership. Capture locally and clear the field so a
-            // racing Dispose doesn't double-release what the subscriber now owns.
+            // Hand off ownership. Capture locally and clear the field BEFORE clearing
+            // the in-flight flag so a racing Dispose cannot observe a cleared flag
+            // while the segment is still valid in the field (use-after-release).
             var segmentToDeliver = currentReceivingSegment;
             currentReceivingSegment = default;
+            Thread.MemoryBarrier();
+
+            // Clear flag AFTER clearing segment so the subscriber can call
+            // ReceiveAsync from the handler. Memory barrier ensures the segment
+            // clear is visible before the flag is cleared.
+            Interlocked.Exchange(ref _receiveInFlight, 0);
 
             try
             {
-                OnPacketReceived?.Invoke(this, onReceived, segmentToDeliver);
+                OnPacketReceived?.Invoke(this, segmentToDeliver);
             }
             catch
             {
                 // Handler bug — make sure the segment goes back to the pool.
-                // Release is idempotent (Task 2), so it is safe even if the
+                // Release is idempotent, so it is safe even if the
                 // handler released before throwing.
                 segmentToDeliver.Release();
                 OnPacketReceiveFailed?.Invoke(this, TransportError.HandlerFailed);
@@ -382,7 +392,6 @@ namespace DuneTransport.Transport
             if (!sendBuffer.GetRegisteredMemory(packet.SegmentIndex, packetSize + HeaderSize, out Memory<byte> memory))
             {
                 Interlocked.Exchange(ref _sendInFlight, 0);
-                packet.Release();
                 OnPacketSendFailed?.Invoke(this, packet, TransportError.InvalidSegment);
                 return;
             }

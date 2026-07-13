@@ -36,17 +36,21 @@ namespace DunePresentation.Packet
         private readonly ConcurrentDictionary<ushort, Entry> _entries = new ConcurrentDictionary<ushort, Entry>();
 
         /// <summary>
-        /// Registers a handler for the specified packet ID and type.
+        /// Registers a handler for the specified packet ID and type using a factory delegate.
         /// </summary>
         /// <typeparam name="T">The packet type, which must have a parameterless constructor.</typeparam>
         /// <param name="packetId">The unique packet identifier.</param>
-        /// <param name="handler">Delegate invoked with deserialized packets of type <typeparamref name="T"/>.</param>
-        /// <exception cref="ArgumentNullException">Thrown when <paramref name="handler"/> is null.</exception>
+        /// <param name="serviceProvider">The application's service provider. The factory is invoked with this provider immediately.</param>
+        /// <param name="handlerFactory">A factory that receives the <paramref name="serviceProvider"/> and returns the handler delegate.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="handlerFactory"/> is null.</exception>
         /// <exception cref="InvalidOperationException">Thrown if <paramref name="packetId"/> is already registered.</exception>
-        public void RegisterHandler<T>(ushort packetId, Action<T> handler) where T : IPacket, new()
+        public void RegisterHandler<T>(ushort packetId, System.IServiceProvider serviceProvider, Func<System.IServiceProvider, Action<T>> handlerFactory) where T : IPacket, new()
         {
-            if (handler == null)
-                throw new ArgumentNullException(nameof(handler));
+            if (handlerFactory == null)
+                throw new ArgumentNullException(nameof(handlerFactory));
+
+            // Invoke factory with the provided service provider, capture the handler closure
+            Action<T> handler = handlerFactory(serviceProvider);
 
             if (!_entries.TryAdd(packetId, new Entry(
                 factory: () => new T(),

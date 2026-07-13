@@ -48,6 +48,13 @@ namespace DuneTransport.BufferManager
         /// <param name="segmentCount">Number of equal-sized segments to create.</param>
         public SegmentedBuffer(int arrayLength = 8192, int segmentCount = 32)
         {
+            if (segmentCount <= 0)
+                throw new ArgumentOutOfRangeException(nameof(segmentCount), "Segment count must be positive.");
+            if (arrayLength <= 0)
+                throw new ArgumentException("Buffer length must be positive.", nameof(arrayLength));
+            if (arrayLength < segmentCount)
+                throw new ArgumentException("arrayLength must be >= segmentCount.", nameof(arrayLength));
+
             segmentSize = arrayLength / segmentCount;
             this.segmentCount = segmentCount;
 

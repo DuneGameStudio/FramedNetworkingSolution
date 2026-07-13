@@ -1,4 +1,4 @@
-using System;
+using System.Linq;
 using DunePresentation.Encryption.Interface;
 using DemoPackets;
 using Xunit;
@@ -80,7 +80,7 @@ namespace DunePresentation.Tests
                 enc1.Encrypt(src, out1);
                 enc2.Encrypt(src, out2);
 
-                Assert.NotEqual(out1[0], out2[0]);
+                Assert.False(out1.SequenceEqual(out2));
             }
         }
     }

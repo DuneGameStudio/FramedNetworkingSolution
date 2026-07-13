@@ -57,16 +57,24 @@ namespace DuneSession.SocketConnectors
         /// <inheritdoc />
         public void StartListening(string address, int port)
         {
-            IPEndPoint endPoint = new IPEndPoint(IPAddress.Parse(address), port);
-            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
-            socket.Bind(endPoint);
-            socket.Listen(_listenBacklog);
-
             if (Interlocked.Exchange(ref isListening, 1) != 0)
             {
                 isListening = 0;
-                Debug.WriteLine("StartListening | Server was already running.", "Error");
+                Debug.WriteLine("StartListening | Server was already listening.", "Error");
                 return;
+            }
+
+            try
+            {
+                IPEndPoint endPoint = new IPEndPoint(IPAddress.Parse(address), port);
+                socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
+                socket.Bind(endPoint);
+                socket.Listen(_listenBacklog);
+            }
+            catch
+            {
+                isListening = 0;
+                throw;
             }
 
             Debug.WriteLine($"Server started listening on {address}:{port}", "log");
@@ -148,9 +156,8 @@ namespace DuneSession.SocketConnectors
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
-            Interlocked.Exchange(ref isListening, 0);
+            StopListening();
             acceptEventArgs.Completed -= OnAcceptCompleted;
-            socket.Dispose();
             acceptEventArgs.Dispose();
         }
     }

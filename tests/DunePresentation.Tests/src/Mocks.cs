@@ -16,6 +16,8 @@ namespace DunePresentation.Tests
     {
         public bool IsConnected { get; set; } = true;
         public bool IsDisposed { get; private set; }
+        public bool ReceiveArmed => false;
+        public bool SendArmed => false;
         public bool ReceiveCalled { get; private set; }
         public int ReceiveCallCount { get; private set; }
         public bool SendCalled { get; private set; }
@@ -26,7 +28,7 @@ namespace DunePresentation.Tests
 
         public event Action<ITransport>? OnPacketSent;
         public event Action<ITransport, Segment, TransportError>? OnPacketSendFailed;
-        public event Action<ITransport, SocketAsyncEventArgs, Segment>? OnPacketReceived;
+        public event Action<ITransport, Segment>? OnPacketReceived;
         public event Action<ITransport, TransportError>? OnPacketReceiveFailed;
 
         public void ReceiveAsync()
@@ -102,6 +104,7 @@ namespace DunePresentation.Tests
         public string? LastAddress { get; private set; }
         public int LastPort { get; private set; }
         public bool Disposed { get; private set; }
+        public bool RejectConnect { get; set; }
 
         public event Action<IConnection>? OnConnected;
         public event Action<SocketError>? OnConnectFailed;
@@ -111,6 +114,8 @@ namespace DunePresentation.Tests
             ConnectCalled = true;
             LastAddress = address;
             LastPort = port;
+            if (RejectConnect)
+                return false;
             return true;
         }
 
@@ -183,10 +188,13 @@ namespace DunePresentation.Tests
         public bool EncryptCalled { get; private set; }
         public bool DecryptCalled { get; private set; }
         public bool SimulateDecryptThrow { get; set; }
+        public bool SimulateEncryptThrow { get; set; }
 
         public void Encrypt(ReadOnlySpan<byte> data, Span<byte> encrypted)
         {
             EncryptCalled = true;
+            if (SimulateEncryptThrow)
+                throw new InvalidOperationException("Encrypt failed");
             data.CopyTo(encrypted);
         }
 

@@ -18,6 +18,24 @@ namespace DuneTransport.Tests
         }
 
         [Fact]
+        public void SegmentedBuffer_Construction_ZeroSegmentCount_Throws()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new SegmentedBuffer(1024, 0));
+        }
+
+        [Fact]
+        public void SegmentedBuffer_Construction_NegativeArrayLength_Throws()
+        {
+            Assert.Throws<ArgumentException>(() => new SegmentedBuffer(-100, 4));
+        }
+
+        [Fact]
+        public void SegmentedBuffer_Construction_ArrayLengthLessThanCount_Throws()
+        {
+            Assert.Throws<ArgumentException>(() => new SegmentedBuffer(2, 4));
+        }
+
+        [Fact]
         public void SegmentedBuffer_Construction_CustomValues()
         {
             var buf = new SegmentedBuffer(1024, 4);
@@ -196,6 +214,33 @@ namespace DuneTransport.Tests
             });
 
             // All segments should be free after balanced reserve/release
+            Assert.Equal(32, buf.FreeCount);
+        }
+
+        /// <summary>
+        /// Verifies that concurrent release of the same segment from multiple threads
+        /// is handled correctly (idempotent release via Interlocked.Exchange).
+        /// </summary>
+        [Fact]
+        public void SegmentedBuffer_ConcurrentDoubleRelease_SameSegment()
+        {
+            var buf = new SegmentedBuffer(1024, 32);
+            Assert.True(buf.TryReserveSegment(out var seg));
+
+            int numThreads = 8;
+            var tasks = new System.Collections.Generic.List<System.Threading.Tasks.Task>();
+
+            for (int i = 0; i < numThreads; i++)
+            {
+                tasks.Add(System.Threading.Tasks.Task.Run(() =>
+                {
+                    try { buf.ReleaseMemory(seg.SegmentIndex); } catch { }
+                }));
+            }
+
+            try { System.Threading.Tasks.Task.WhenAll(tasks).Wait(3000); } catch { }
+
+            // Segment should be released exactly once (idempotent)
             Assert.Equal(32, buf.FreeCount);
         }
     }

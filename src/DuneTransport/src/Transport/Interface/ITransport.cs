@@ -1,5 +1,4 @@
 using System;
-using System.Net.Sockets;
 using DuneTransport.BufferManager;
 
 namespace DuneTransport.Transport.Interface
@@ -31,6 +30,26 @@ namespace DuneTransport.Transport.Interface
         bool IsDisposed { get; }
 
         /// <summary>
+        /// Gets whether a receive operation is currently in-flight on this transport.
+        /// </summary>
+        /// <remarks>
+        /// True while <see cref="ReceiveAsync"/> has been called but the operation has not
+        /// yet completed (via <see cref="OnPacketReceived"/> or <see cref="OnPacketReceiveFailed"/>).
+        /// Use this instead of maintaining a separate "receive armed" flag at the application layer.
+        /// </remarks>
+        bool ReceiveArmed { get; }
+
+        /// <summary>
+        /// Gets whether a send operation is currently in-flight on this transport.
+        /// </summary>
+        /// <remarks>
+        /// True while <see cref="SendAsync"/> has been called but the operation has not
+        /// yet completed (via <see cref="OnPacketSent"/> or <see cref="OnPacketSendFailed"/>).
+        /// Use this instead of maintaining a separate "send armed" flag at the application layer.
+        /// </remarks>
+        bool SendArmed { get; }
+
+        /// <summary>
         /// Raised when a packet send completes successfully.
         /// </summary>
         /// <remarks>
@@ -58,7 +77,7 @@ namespace DuneTransport.Transport.Interface
         /// ownership TRANSFERS to the subscriber — the subscriber is
         /// responsible for calling <c>Release()</c> when done.
         /// </summary>
-        event Action<ITransport, SocketAsyncEventArgs, Segment>? OnPacketReceived;
+        event Action<ITransport, Segment>? OnPacketReceived;
 
         /// <summary>
         /// Raised when a receive attempt fails. Any segment Transport had
