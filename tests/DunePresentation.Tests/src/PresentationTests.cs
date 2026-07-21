@@ -1,6 +1,8 @@
 using System;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using DunePresentation.Encryption.Interface;
 using DunePresentation.Packet;
@@ -766,6 +768,247 @@ namespace DunePresentation.Tests
             server.Dispose();
         }
 
+        /// <summary>
+        /// Verifies Peer.SerializeAndEncrypt works end-to-end with a REAL Transport
+        /// (not mock). Sends a packet through real sockets and verifies the server
+        /// receives and decrypts it correctly.
+        /// </summary>
+        [Fact]
+        public async Task Peer_SerializeAndEncrypt_RealTransport_EndToEnd()
+        {
+            // ARRANGE - Real socket pair
+            var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            listener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
+            listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            listener.Listen(1);
+            int port = ((IPEndPoint)listener.LocalEndPoint!).Port;
+
+            var clientSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            clientSocket.Connect(new IPEndPoint(IPAddress.Loopback, port));
+            var serverSocket = listener.Accept();
+            listener.Close();
+
+            try
+            {
+                var registry = new PacketRegistry();
+                var receivedPacket = new TaskCompletionSource<EchoPacket>();
+
+                // Server peer
+                var serverConn = new Connection(serverSocket);
+                var serverPeer = new global::DunePresentation.Peer.Peer(serverConn, registry);
+                registry.RegisterHandler<EchoPacket>(0x0003, null!, _ => p =>
+                {
+                    if (p is EchoPacket ep) receivedPacket.TrySetResult(ep);
+                });
+                // Need to call DecryptAndDeserialize in the transport handler
+                serverPeer.Connection.Transport.OnPacketReceived += (t, seg) =>
+                {
+                    var result = serverPeer.DecryptAndDeserialize(seg);
+                    if (result.HasValue && result.Value.Packet is EchoPacket ep)
+                        receivedPacket.TrySetResult(ep);
+                    if (serverPeer.IsConnected)
+                        t.ReceiveAsync();
+                };
+                serverPeer.Connection.Transport.ReceiveAsync();
+
+                // Client peer
+                var clientConn = new Connection(clientSocket);
+                var clientPeer = new global::DunePresentation.Peer.Peer(clientConn, registry);
+
+                // ACT - Serialize and send real packet
+                var packet = new EchoPacket { Text = "real transport test" };
+                var segment = clientPeer.SerializeAndEncrypt(packet);
+
+                Assert.True(segment.SegmentIndex > 0, "Should reserve real segment from transport");
+                Assert.Equal(2 + Encoding.UTF8.GetByteCount("real transport test"), packet.PacketSize);
+
+                clientPeer.Send(segment, packet.PacketSize);
+
+                // ASSERT - Wait for server to receive and deserialize
+                var received = await receivedPacket.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Equal("real transport test", received.Text);
+
+                clientPeer.Dispose();
+                serverPeer.Dispose();
+            }
+            finally
+            {
+                try { clientSocket.Close(); } catch { }
+                try { serverSocket.Close(); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// Verifies Peer.DecryptAndDeserialize correctly handles decryptor failure
+        /// with a throwing encryptor.
+        /// </summary>
+        [Fact]
+        public void Peer_DecryptAndDeserialize_ThrowingEncryptor_FailsWithDecryptError()
+        {
+            // ARRANGE - Encryptor that throws on decrypt
+            var throwingEncryptor = new ThrowingEncryptor(simulateDecryptThrow: true);
+            var registry = new PacketRegistry();
+            var mockConn = new MockConnection(new MockTransport { ReserveSendResult = true });
+            var peer = new global::DunePresentation.Peer.Peer(mockConn, registry, throwingEncryptor);
+
+            bool released = false;
+            var segment = new Segment
+            {
+                SegmentIndex = 1,
+                Memory = new byte[10],
+                ReleaseMemoryCallback = _ => released = true
+            };
+
+            // ACT
+            PacketError? error = null;
+            peer.OnDeserializeFailed += e => error = e;
+            var result = peer.DecryptAndDeserialize(segment);
+
+            // ASSERT
+            Assert.Null(result);
+            Assert.Equal(PacketError.DecryptError, error);
+            Assert.True(released, "Segment should be released on decrypt error");
+
+            peer.Dispose();
+        }
+
+        /// <summary>
+        /// Test-only encryptor that throws on decrypt to test error handling.
+        /// </summary>
+        private class ThrowingEncryptor : IPacketEncryptor
+        {
+            private readonly bool _throwOnDecrypt;
+            public ThrowingEncryptor(bool simulateDecryptThrow) => _throwOnDecrypt = simulateDecryptThrow;
+            public void Encrypt(ReadOnlySpan<byte> source, Span<byte> dest) => source.CopyTo(dest);
+            public void Decrypt(ReadOnlySpan<byte> source, Span<byte> dest)
+            {
+                if (_throwOnDecrypt) throw new CryptographicException("Decrypt failed");
+                source.CopyTo(dest);
+            }
+        }
+
+        /// <summary>
+        /// Verifies Peer.Send correctly delegates to Transport.SendAsync with real transport.
+        /// </summary>
+        [Fact]
+        public async Task Peer_Send_RealTransport_DelegatesCorrectly()
+        {
+            // ARRANGE - Real socket pair
+            var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            listener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
+            listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            listener.Listen(1);
+            int port = ((IPEndPoint)listener.LocalEndPoint!).Port;
+
+            var clientSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            clientSocket.Connect(new IPEndPoint(IPAddress.Loopback, port));
+            var serverSocket = listener.Accept();
+            listener.Close();
+
+            try
+            {
+                var registry = new PacketRegistry();
+                var receivedData = new TaskCompletionSource<byte[]>();
+
+                // Server peer - just receive raw data
+                var serverConn = new Connection(serverSocket);
+                var serverPeer = new global::DunePresentation.Peer.Peer(serverConn, registry);
+                serverPeer.Connection.Transport.OnPacketReceived += (t, seg) =>
+                {
+                    var data = seg.Memory.Span.ToArray();
+                    receivedData.TrySetResult(data);
+                    seg.Release();
+                };
+                serverPeer.Connection.Transport.ReceiveAsync();
+
+                // Client peer
+                var clientConn = new Connection(clientSocket);
+                var clientPeer = new global::DunePresentation.Peer.Peer(clientConn, registry);
+
+                // ACT - Create segment and send via Peer.Send
+                var payload = new byte[] { 0xAA, 0xBB, 0xCC, 0xDD };
+                clientConn.Transport.TryReserveSendPacket(out var segment);
+                payload.CopyTo(segment.Memory.Span);
+                clientPeer.Send(segment, payload.Length);
+
+                // ASSERT
+                var received = await receivedData.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                // OnPacketReceived delivers the payload segment (header already stripped by transport)
+                Assert.Equal(payload.Length, received.Length);
+                Assert.Equal(payload, received);
+
+                clientPeer.Dispose();
+                serverPeer.Dispose();
+            }
+            finally
+            {
+                try { clientSocket.Close(); } catch { }
+                try { serverSocket.Close(); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// Verifies PeerClient full stack integration: PeerClient connects to PeerServer
+        /// over real sockets, both create real Peers with encryption, and packets flow end-to-end.
+        /// </summary>
+        [Fact]
+        public async Task PeerClient_RealServer_FullStackHandshake()
+        {
+            // ARRANGE - Start real PeerServer
+            var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            listener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
+            listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            listener.Listen(1);
+            int port = ((IPEndPoint)listener.LocalEndPoint!).Port;
+            listener.Close();
+
+            var registry = new PacketRegistry();
+            registry.RegisterHandler<EchoPacket>(0x0003, null!, _ => p => { });
+
+            var server = new PeerServer(registry, encryptorFactory: () => new XorEncryptor(0x42));
+            server.StartListening("127.0.0.1", port);
+            server.AcceptConnection();
+
+            var serverPeerTcs = new TaskCompletionSource<IPeer>();
+            server.OnPeerConnected += p => serverPeerTcs.TrySetResult(p);
+
+            // ACT - Client connects
+            var client = new PeerClient(registry, encryptorFactory: () => new XorEncryptor(0x42));
+            var clientPeerTcs = new TaskCompletionSource<IPeer>();
+            client.OnPeerConnected += p => clientPeerTcs.TrySetResult(p);
+            client.ConnectAsync("127.0.0.1", port);
+
+            var serverPeer = await serverPeerTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var clientPeer = await clientPeerTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Set up server receive
+            var receivedPacket = new TaskCompletionSource<EchoPacket>();
+            serverPeer.Connection.Transport.OnPacketReceived += (t, seg) =>
+            {
+                var result = serverPeer.DecryptAndDeserialize(seg);
+                if (result.HasValue && result.Value.Packet is EchoPacket ep)
+                    receivedPacket.TrySetResult(ep);
+                if (serverPeer.IsConnected)
+                    t.ReceiveAsync();
+            };
+            serverPeer.Connection.Transport.ReceiveAsync();
+
+            // Client sends encrypted packet
+            var sendPacket = new EchoPacket { Text = "full stack encrypted" };
+            var segment = clientPeer.SerializeAndEncrypt(sendPacket);
+            Assert.True(segment.SegmentIndex > 0);
+            clientPeer.Send(segment, sendPacket.PacketSize);
+
+            // ASSERT - Server received and decrypted correctly
+            var received = await receivedPacket.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("full stack encrypted", received.Text);
+
+            clientPeer.Dispose();
+            serverPeer.Dispose();
+            client.Dispose();
+            server.Dispose();
+        }
+
         #endregion
 
         #region Concurrency Tests
@@ -843,6 +1086,66 @@ namespace DunePresentation.Tests
 
             // Verify no exceptions and registrations succeeded
             Assert.True(true);
+        }
+
+        #endregion
+
+        #region PresentationHeader Tests
+
+        // Span<T> is a ref-like struct and cannot be captured by Assert.Throws's lambda,
+        // so the throwing call must allocate its array-backed span *inside* the lambda.
+        // Each invocation builds a fresh 1-byte buffer (smaller than PresentationHeader.Size),
+        // forcing the real size guard to throw.
+        private static Action WriteTooSmall { get; } = () =>
+        {
+            Span<byte> buffer = new byte[1];
+            PresentationHeader.Write(buffer, 42);
+        };
+
+        private static Action ReadTooSmall { get; } = () =>
+        {
+            ReadOnlySpan<byte> buffer = new byte[1];
+            PresentationHeader.Read(buffer, out _);
+        };
+
+        /// <summary>
+        /// Verifies that PresentationHeader.Write throws ArgumentException when the
+        /// destination buffer is smaller than the 2-byte header, exercising the real
+        /// validation branch in PresentationHeader.Write (line 28-29).
+        /// </summary>
+        [Fact]
+        public void PresentationHeader_Write_BufferTooSmall_Throws()
+        {
+            // Buffer smaller than PresentationHeader.Size (2) must throw.
+            Assert.Throws<ArgumentException>(WriteTooSmall);
+
+            // Boundary: an exactly-sized buffer must NOT throw, proving the assertion
+            // targets the size guard rather than rejecting any input.
+            Span<byte> exact = stackalloc byte[PresentationHeader.Size];
+            PresentationHeader.Write(exact, 42);
+
+            // Round-trip through the real Read to confirm the value landed correctly.
+            PresentationHeader.Read(exact, out var packetId);
+            Assert.Equal(42, packetId);
+        }
+
+        /// <summary>
+        /// Verifies that PresentationHeader.Read throws ArgumentException when the
+        /// source buffer is smaller than the 2-byte header, exercising the real
+        /// validation branch in PresentationHeader.Read (line 42-43).
+        /// </summary>
+        [Fact]
+        public void PresentationHeader_Read_BufferTooSmall_Throws()
+        {
+            // Buffer smaller than PresentationHeader.Size (2) must throw.
+            Assert.Throws<ArgumentException>(ReadTooSmall);
+
+            // Boundary: an exactly-sized buffer with a known value must NOT throw and
+            // must return the value that was written, proving the guard is on size only.
+            Span<byte> exact = stackalloc byte[PresentationHeader.Size];
+            PresentationHeader.Write(exact, 7);
+            PresentationHeader.Read(exact, out var packetId);
+            Assert.Equal(7, packetId);
         }
 
         #endregion

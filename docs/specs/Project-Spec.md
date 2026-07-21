@@ -20,7 +20,7 @@ Consumers depend on `DunePresentation` and treat the lower layers as implementat
 
 2. **The library never auto-disconnects on error conditions.** Socket errors (connection reset, network unreachable) surface as events with reason codes; the application decides whether to retry, disconnect, or dispose. A TCP FIN — the peer's explicit intent to close — triggers an automatic disconnect signal, since there is nothing left to recover.
 
-3. **No internal loops.** The only self-driving behavior is the receive re-arm in Transport — after each completed receive, the pipeline re-arms itself to handle stream fragmentation. The application may run its own loops (e.g., a main loop iterating over connected sockets), but the library does not impose or require any.
+3. **No application-level loops.** The only self-driving behavior is the receive re-arm inside Transport's SAEA callback — after each completed phase of the two-phase receive (header → payload), the callback re-issues the socket operation to handle stream fragmentation. This is an internal I/O state machine, not an application dispatch loop. The application may run its own loops (e.g., a main loop iterating over connected sockets), but the library does not impose or require any.
 
 4. **Single-flight per connection.** Each connection accepts one send and one receive operation at a time. Reentrant calls are rejected with a reason code. The application is responsible for serializing its own calls.
 
@@ -37,8 +37,9 @@ Raw byte send and receive with I/O error notification.
 
 ### Event Ownership
 
+* **Packet sent:** segment released by Transport (it owns the buffer layout). The subscriber receives only a completion signal.
 * **Packet received:** segment ownership transfers to the subscriber. The subscriber must release it.
-* **Packet receive failed:** no segment is passed; any rented segment has already been released.
+* **Packet receive failed:** no segment is passed; any rented segment has already been released by Transport.
 * **Packet send failed:** segment ownership transfers to the subscriber. The subscriber must either retry with `SendAsync()` or call `Release()`. All error types follow this same contract — the application decides based on the `TransportError` code.
 
 ### API Caveats
@@ -111,15 +112,21 @@ Task: main loop over connected Peers      │
       task calling ReceiveAsync()        │  ← SAEA Completion Callback
       task calling SendAsync()           │     (thread-pool thread)
       on receive callback →              │     ↓
-        mark ready, queue packet         │     ProcessReceive / ProcessSend
-      on send callback →                 │     ↓
-        mark ready                       │     Fire events
+        queue packet                     │     Transport-level: ProcessReceive /
+      on send callback →                 │       ProcessSend (I/O state machine)
+                                         │       ↓
+                                         │     Pipeline-level: fire events
       main loop conditionally            │     (OnPacketReceived, etc.)
-        re-arms send/receive             │
-                                         │
+        re-arms send/receive             │  ← application event handlers
+                                         │       (enqueue to channel, unwire, etc.)
   → only one send + one receive          │
      active at a time per peer           │
 ```
+
+**Two tiers of SAEA callbacks:**
+
+* **Transport-level:** The library's internal SAEA callbacks (`OnPacketReceivedEventHandler`, `OnPacketSentEventHandler`) manage the I/O state machine — two-phase receive (header → payload), segment reservation/release, in-flight flag management. This work is inherent to SAEA and cannot be offloaded.
+* **Pipeline/application-level:** The events fired by Transport (`OnPacketReceived`, `OnPacketSent`, `OnPacketSendFailed`, `OnPacketReceiveFailed`) are handled by the application. These handlers should be signal-only — enqueue to channels, unwire temporary handlers, release segments on error. No business logic, no blocking.
 
 Key properties:
 

@@ -36,6 +36,10 @@ obj/
 *.mdb.meta
 *.meta
 *.DS_Store
+*TestResults
+*.remember
+*.superpowers
+
 
 ### Windows ###
 # Windows thumbnail cache files
