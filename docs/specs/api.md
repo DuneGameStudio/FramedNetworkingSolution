@@ -58,12 +58,13 @@ Wraps a raw TCP socket with framing and pooling.
 #### Constructor
 
 ```C#
-new Transport(Socket socket)
+new Transport(Socket socket, IDiagnosticWriter? diagnostics = null)
 ```
 
-| Parameter | Type     | Description                               |
-| --------- | -------- | ----------------------------------------- |
-| `socket`  | `Socket` | A connected TCP socket. Must not be null. |
+| Parameter     | Type                  | Description                                         |
+| ------------- | --------------------- | --------------------------------------------------- |
+| `socket`      | `Socket`              | A connected TCP socket. Must not be null.           |
+| `diagnostics` | `IDiagnosticWriter?`  | Optional diagnostic writer. Defaults to no-op.      |
 
 **Throws:** `ArgumentNullException` if `socket` is null.
 
@@ -159,7 +160,7 @@ void ReceiveAsync()
 **Example:**
 
 ```C#
-transport.OnPacketReceived += (t, args, seg) =>
+transport.OnPacketReceived += (t, seg) =>
 {
     // process seg.Memory.Span
     seg.Release();
@@ -193,7 +194,7 @@ void Dispose()
 
 | Event                   | Signature                                                 | Description                                                                                                                                     |
 | ----------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OnPacketReceived`      | `Action&lt;ITransport, SocketAsyncEventArgs, Segment&gt;` | Fired when a complete framed packet is received. Segment ownership **transfers** to the subscriber. Subscriber must call `Release()` when done. |
+| `OnPacketReceived`      | `Action&lt;ITransport, Segment&gt;`                       | Fired when a complete framed packet is received. Segment ownership **transfers** to the subscriber. Subscriber must call `Release()` when done. |
 | `OnPacketSent`          | `Action&lt;ITransport&gt;`                                | Fired when a send completes successfully. Segment already released.                                                                             |
 | `OnPacketSendFailed`    | `Action&lt;ITransport, Segment, TransportError&gt;`       | Fired when a send fails. Segment ownership **transfers** to the subscriber. Subscriber must retry or release.                                   |
 | `OnPacketReceiveFailed` | `Action&lt;ITransport, TransportError&gt;`                | Fired when a receive fails. No segment passed.                                                                                                  |
@@ -339,6 +340,12 @@ Factory for client connections. Handles TCP handshake and produces an `IConnecti
 interface IClientConnector : IDisposable
 ```
 
+#### Properties
+
+| Property      | Type     | Description                                                |
+| ------------- | -------- | ---------------------------------------------------------- |
+| `IsConnected` | `bool`   | `true` if a connection is currently active.               |
+
 #### Methods
 
 | Method                                   | Returns | Description                                                                                 |
@@ -372,6 +379,12 @@ Factory for server connections. Binds a listening socket and produces `IConnecti
 ```C#
 interface IServerConnector : IDisposable
 ```
+
+#### Properties
+
+| Property      | Type     | Description                                                |
+| ------------- | -------- | ---------------------------------------------------------- |
+| `IsListening` | `bool`   | `true` if the server is currently listening.              |
 
 #### Methods
 
@@ -505,14 +518,21 @@ interface IPeerClient : IDisposable
 #### Constructor
 
 ```C#
-new PeerClient(PacketRegistry registry, Func&lt;IPacketEncryptor&gt;? encryptor = null, IClientConnector? client = null)
+new PeerClient(PacketRegistry registry, Func&lt;IPacketEncryptor&gt;? encryptor = null, IClientConnector? client = null, IDiagnosticWriter? diagnostics = null)
 ```
 
-| Parameter   | Type                            | Description                                                             |
-| ----------- | ------------------------------- | ----------------------------------------------------------------------- |
-| `registry`  | `PacketRegistry`                | Shared packet registry. Must not be null.                               |
-| `encryptor` | `Func&lt;IPacketEncryptor&gt;?` | Optional factory that produces an encryptor per connection.             |
-| `client`    | `IClientConnector?`             | Optional connector. A new `ClientConnector` is created if not provided. |
+| Parameter     | Type                            | Description                                                             |
+| ------------- | ------------------------------- | ----------------------------------------------------------------------- |
+| `registry`    | `PacketRegistry`                | Shared packet registry. Must not be null.                               |
+| `encryptor`   | `Func&lt;IPacketEncryptor&gt;?` | Optional factory that produces an encryptor per connection.             |
+| `client`      | `IClientConnector?`             | Optional connector. A new `ClientConnector` is created if not provided. |
+| `diagnostics` | `IDiagnosticWriter?`            | Optional diagnostic writer. Defaults to no-op.                          |
+
+#### Properties
+
+| Property      | Type     | Description                                            |
+| ------------- | -------- | ------------------------------------------------------ |
+| `IsConnected` | `bool`   | `true` if a peer connection is currently active.      |
 
 #### Methods
 
@@ -567,14 +587,21 @@ interface IPeerServer : IDisposable
 #### Constructor
 
 ```C#
-new PeerServer(PacketRegistry registry, Func&lt;IPacketEncryptor&gt;? encryptor = null, IServerConnector? server = null)
+new PeerServer(PacketRegistry registry, Func&lt;IPacketEncryptor&gt;? encryptor = null, IServerConnector? server = null, IDiagnosticWriter? diagnostics = null)
 ```
 
-| Parameter   | Type                            | Description                                                             |
-| ----------- | ------------------------------- | ----------------------------------------------------------------------- |
-| `registry`  | `PacketRegistry`                | Shared packet registry. Must not be null.                               |
-| `encryptor` | `Func&lt;IPacketEncryptor&gt;?` | Optional factory that produces an encryptor per connection.             |
-| `server`    | `IServerConnector?`             | Optional connector. A new `ServerConnector` is created if not provided. |
+| Parameter     | Type                            | Description                                                             |
+| ------------- | ------------------------------- | ----------------------------------------------------------------------- |
+| `registry`    | `PacketRegistry`                | Shared packet registry. Must not be null.                               |
+| `encryptor`   | `Func&lt;IPacketEncryptor&gt;?` | Optional factory that produces an encryptor per connection.             |
+| `server`      | `IServerConnector?`             | Optional connector. A new `ServerConnector` is created if not provided. |
+| `diagnostics` | `IDiagnosticWriter?`            | Optional diagnostic writer. Defaults to no-op.                          |
+
+#### Properties
+
+| Property      | Type     | Description                                            |
+| ------------- | -------- | ------------------------------------------------------ |
+| `IsListening` | `bool`   | `true` if the server is currently listening.          |
 
 #### Methods
 

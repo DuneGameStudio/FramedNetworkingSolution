@@ -40,8 +40,24 @@ namespace DuneTransport.BufferManager.Interface
         /// </summary>
         /// <returns><c>true</c> if serialization succeeded; otherwise <c>false</c>.</returns>
         /// <remarks>
-        /// Implementations should write to <see cref="segment"/>. On failure,
-        /// <see cref="Serialize"/> releases the segment automatically.
+        /// <para>
+        /// Implementations should write to <see cref="segment"/> and set <see cref="PacketSize"/> to
+        /// the total number of bytes written (including any framing the implementor owns). On a
+        /// <c>false</c> return, <see cref="Serialize"/> releases the segment automatically.
+        /// </para>
+        /// <para>
+        /// <b>Contract: this method MUST NOT throw.</b> Report failure only by returning <c>false</c>.
+        /// A throw escapes <see cref="Serialize"/> before the segment is released, leaking the pool
+        /// segment — this is a contract violation by the implementor. Wrap any operation that can
+        /// throw (encoding, encryption, buffer writes) in a try/catch and convert it to a
+        /// <c>false</c> return.
+        /// </para>
+        /// <para>
+        /// Framing headers, encryption, and any post-reserve transformation of the segment that is
+        /// not owned by the implementor are NOT this method's concern — they are the caller's
+        /// responsibility, performed after <see cref="Serialize"/> returns <see cref="SerializeResult.Ok"/>.
+        /// Do not write them here.
+        /// </para>
         /// </remarks>
         bool OnSerialize();
 
@@ -50,46 +66,70 @@ namespace DuneTransport.BufferManager.Interface
         /// </summary>
         /// <returns><c>true</c> if deserialization succeeded; otherwise <c>false</c>.</returns>
         /// <remarks>
-        /// The segment is released by <see cref="Deserialize"/> regardless of the return value.
+        /// <para>
+        /// The segment is released by <see cref="Deserialize"/> regardless of the return value
+        /// (success or failure alike).
+        /// </para>
+        /// <para>
+        /// <b>Contract: this method MUST NOT throw.</b> Report failure only by returning <c>false</c>.
+        /// A throw escapes <see cref="Deserialize"/> before the segment is released, leaking the pool
+        /// segment — this is a contract violation by the implementor. Wrap any operation that can
+        /// throw (decoding, decryption, malformed-input handling) in a try/catch and convert it to
+        /// a <c>false</c> return.
+        /// </para>
         /// </remarks>
         bool OnDeserialize();
 
         /// <summary>
-        /// Orchestrates the full serialization lifecycle: reserve, serialize, callback.
+        /// Orchestrates the full serialization lifecycle: reserve, then serialize into the segment.
         /// </summary>
         /// <param name="transport">
         /// The transport to reserve a send segment from.
         /// </param>
-        /// <param name="afterSerialize">
-        /// Optional callback invoked after successful serialization with the segment and size.
-        /// </param>
-        /// <returns><c>true</c> if the segment was reserved and serialization succeeded; otherwise <c>false</c>.</returns>
+        /// <returns>
+        /// A <see cref="SerializeResult"/> indicating the outcome:
+        /// <list type="bullet">
+        ///   <item><see cref="SerializeResult.Ok"/> — segment reserved and serialized; ownership transfers to caller.</item>
+        ///   <item><see cref="SerializeResult.PoolExhausted"/> — no segment available; <see cref="OnSerialize"/> not called.</item>
+        ///   <item><see cref="SerializeResult.SerializeFailed"/> — segment reserved but <see cref="OnSerialize"/> returned <c>false</c>; segment released.</item>
+        /// </list>
+        /// </returns>
         /// <remarks>
         /// <para>
         /// Lifecycle:
         /// <list type="number">
         ///   <item>Reserve a segment from <paramref name="transport"/>.</item>
-        ///   <item>Call <see cref="OnSerialize"/> to write data into the segment.</item>
-        ///   <item>If serialization fails, release the segment and return <c>false</c>.</item>
-        ///   <item>If successful, invoke <paramref name="afterSerialize"/> with the segment and <see cref="PacketSize"/>.</item>
+        ///   <item>Call <see cref="OnSerialize"/> to write packet data into the segment.</item>
+        ///   <item>If serialization fails, release the segment and return <see cref="SerializeResult.SerializeFailed"/>.</item>
+        ///   <item>On success, return <see cref="SerializeResult.Ok"/>. Ownership of <see cref="segment"/> transfers to
+        ///   the caller, which is responsible for any framing/encryption and for handing the
+        ///   segment to the transport.</item>
         /// </list>
         /// </para>
+        /// <para>
+        /// This method only orchestrates reserve → serialize → handoff. It deliberately performs
+        /// no post-serialization work (no header writing, no encryption): those are caller
+        /// concerns that belong above the transport layer. Keeping them out of this protected
+        /// region ensures the segment lifecycle is the only thing this method owns, and the only
+        /// thing that can throw inside it is <see cref="OnSerialize"/> — which the contract above
+        /// forbids from throwing. Callers that post-process the returned segment must guard their
+        /// own work and release on failure.
+        /// </para>
         /// </remarks>
-        bool Serialize(ITransport transport, Action<Segment, int>? afterSerialize = null)
+        SerializeResult Serialize(ITransport transport)
         {
             if (!transport.TryReserveSendPacket(out Segment newSegment))
-                return false;
+                return SerializeResult.PoolExhausted;
 
             segment = newSegment;
 
             if (!OnSerialize())
             {
                 segment.Release();
-                return false;
+                return SerializeResult.SerializeFailed;
             }
 
-            afterSerialize?.Invoke(segment, PacketSize);
-            return true;
+            return SerializeResult.Ok;
         }
 
         /// <summary>
@@ -98,7 +138,13 @@ namespace DuneTransport.BufferManager.Interface
         /// <param name="beforeDeserialize">
         /// Optional callback invoked before deserialization begins, with the current segment and size.
         /// </param>
-        /// <returns><c>true</c> if deserialization succeeded; otherwise <c>false</c>.</returns>
+        /// <returns>
+        /// A <see cref="DeserializeResult"/> indicating the outcome:
+        /// <list type="bullet">
+        ///   <item><see cref="DeserializeResult.Ok"/> — deserialization succeeded; segment released.</item>
+        ///   <item><see cref="DeserializeResult.DeserializeFailed"/> — <see cref="OnDeserialize"/> returned <c>false</c>; segment released.</item>
+        /// </list>
+        /// </returns>
         /// <remarks>
         /// <para>
         /// Lifecycle:
@@ -109,13 +155,13 @@ namespace DuneTransport.BufferManager.Interface
         /// </list>
         /// </para>
         /// </remarks>
-        bool Deserialize(Action<Segment, int>? beforeDeserialize = null)
+        DeserializeResult Deserialize(Action<Segment, int>? beforeDeserialize = null)
         {
             beforeDeserialize?.Invoke(segment, PacketSize);
 
             bool result = OnDeserialize();
             segment.Release();
-            return result;
+            return result ? DeserializeResult.Ok : DeserializeResult.DeserializeFailed;
         }
     }
 }

@@ -12,6 +12,7 @@ using DunePresentation.Peer.Interfaces;
 using DuneSession.SocketConnectors;
 using DuneSession.SocketConnectors.Interface;
 using DuneTransport.BufferManager;
+using DuneTransport.BufferManager.Interface;
 using DuneTransport.Transport;
 using DuneTransport.Transport.Interface;
 using DemoPackets;
@@ -116,6 +117,118 @@ namespace DunePresentation.Tests
             peer.Dispose();
         }
 
+        // Transport that reserves a segment whose Release() is observable (the real pool's
+        // SegmentedBuffer release callback is private; here we own it so we can assert the
+        // segment was returned on a presentation-throw).
+        private class ObservableReleaseTransport : ITransport
+        {
+            public bool ReserveResult { get; set; } = true;
+            public bool ReleaseInvoked { get; private set; }
+            public Segment? ReservedSegment { get; private set; }
+
+            public bool IsConnected => true;
+            public bool IsDisposed => false;
+            public bool ReceiveArmed => false;
+            public bool SendArmed => false;
+
+            public event Action<ITransport>? OnPacketSent;
+            public event Action<ITransport, Segment, TransportError>? OnPacketSendFailed;
+            public event Action<ITransport, Segment>? OnPacketReceived;
+            public event Action<ITransport, TransportError>? OnPacketReceiveFailed;
+
+            public void ReceiveAsync() { }
+            public void SendAsync(Segment packet, int packetSize) { }
+
+            public bool TryReserveSendPacket(out Segment segment)
+            {
+                if (!ReserveResult) { segment = default; return false; }
+                segment = new Segment(1, new byte[256], _ => { });
+                var self = this;
+                // Can't set ReleaseMemoryCallback on immutable property, so we use the constructor
+                // Actually, we need a mutable callback. Let's make the constructor handle this.
+                // We'll set the callback by re-creating the segment
+                segment = new Segment(1, new byte[256], _ => self.ReleaseInvoked = true);
+                ReservedSegment = segment;
+                return true;
+            }
+            public void Dispose() { }
+        }
+
+        [Fact]
+        public void SerializeAndEncrypt_EncryptorThrows_ReleasesSegment_FiresSerializationError()
+        {
+            // ARRANGE — encryptor throws during the in-place encrypt phase (after Serialize
+            // reserved + OnSerialize succeeded). This is the SEG-1/SEG-2 leak path: the segment
+            // was reserved and handed to Peer; a presentation-throw must release it and fire
+            // OnSerializeFailed(SerializationError) rather than propagate.
+            var transport = new ObservableReleaseTransport();
+            var connection = new MockConnection(transport);
+            var registry = new PacketRegistry();
+            var encryptor = new MockEncryptor { SimulateEncryptThrow = true };
+            var peer = new global::DunePresentation.Peer.Peer(connection, registry, encryptor);
+
+            PacketError? error = null;
+            peer.OnSerializeFailed += e => error = e;
+
+            var packet = new EchoPacket { Text = "hello" };
+
+            // ACT
+            Segment segment;
+            try
+            {
+                segment = peer.SerializeAndEncrypt(packet);
+            }
+            catch
+            {
+                // The contract of this method is to NOT propagate presentation throws.
+                Assert.Fail("SerializeAndEncrypt must not propagate a presentation-layer throw; it should release the segment and fire OnSerializeFailed.");
+                return;
+            }
+
+            // ASSERT
+            Assert.Equal(0, segment.SegmentIndex);
+            Assert.Equal(PacketError.SerializationError, error);
+            Assert.True(transport.ReleaseInvoked, "Reserved segment must be released back to the pool when the encryptor throws (otherwise SEG-2 leak)");
+            Assert.True(encryptor.EncryptCalled, "Sanity — encryptor was actually invoked (throw path reached)");
+            peer.Dispose();
+        }
+
+        [Fact]
+        public void SerializeAndEncrypt_OnSerializeFalse_FiresSerializationError()
+        {
+            // ARRANGE — a packet whose OnSerialize returns false (simulating a serialize
+            // failure after the segment was reserved). The peer should fire
+            // OnSerializeFailed(SerializationError) and return default, not PoolExhausted.
+            var transport = new ObservableReleaseTransport();
+            var connection = new MockConnection(transport);
+            var registry = new PacketRegistry();
+            registry.RegisterHandler<BadSerializePacket>(0x0098, null!, _ => _ => { });
+            var peer = new global::DunePresentation.Peer.Peer(connection, registry);
+
+            PacketError? error = null;
+            peer.OnSerializeFailed += e => error = e;
+
+            var packet = new BadSerializePacket();
+
+            // ACT
+            Segment segment;
+            try
+            {
+                segment = peer.SerializeAndEncrypt(packet);
+            }
+            catch
+            {
+                Assert.Fail("SerializeAndEncrypt must not propagate a serialize failure; it should fire OnSerializeFailed(SerializationError).");
+                return;
+            }
+
+            // ASSERT
+            Assert.Equal(0, segment.SegmentIndex);
+            Assert.Equal(PacketError.SerializationError, error);
+            Assert.True(transport.ReleaseInvoked, "Reserved segment must be released back to the pool when OnSerialize returns false");
+            peer.Dispose();
+        }
+
         [Fact]
         public void Send_DelegatesToTransport()
         {
@@ -124,7 +237,7 @@ namespace DunePresentation.Tests
             var registry = new PacketRegistry();
             var peer = new global::DunePresentation.Peer.Peer(connection, registry);
 
-            var segment = new Segment { SegmentIndex = 1, Memory = new byte[64] };
+            var segment = new Segment(1, new byte[64], _ => { });
             peer.Send(segment, 64);
 
             Assert.True(transport.SendCalled);
@@ -175,7 +288,7 @@ namespace DunePresentation.Tests
             // DecryptAndDeserialize sets packet.PacketSize = span.Length
             // So OnDeserialize reads span.Length - PresentationHeader.Size as the payload
             var wireData = new byte[] { 0x03, 0x00, (byte)'h', (byte)'i' }; // packet ID + "hi"
-            var segment = new Segment { SegmentIndex = 1, Memory = wireData, ReleaseMemoryCallback = _ => { } };
+            var segment = new Segment(1, wireData, _ => { });
 
             var result = peer.DecryptAndDeserialize(segment);
             Assert.NotNull(result);
@@ -194,7 +307,7 @@ namespace DunePresentation.Tests
             var peer = new global::DunePresentation.Peer.Peer(connection, registry);
 
             bool released = false;
-            var segment = new Segment { SegmentIndex = 1, Memory = new byte[100], ReleaseMemoryCallback = _ => released = true };
+            var segment = new Segment(1, new byte[100], _ => released = true);
             var span = segment.Memory.Span;
             span[0] = 0xFF; span[1] = 0xFF; // unregistered packet ID 0xFFFF
 
@@ -218,7 +331,7 @@ namespace DunePresentation.Tests
             var peer = new global::DunePresentation.Peer.Peer(connection, registry, encryptor);
 
             bool released = false;
-            var segment = new Segment { SegmentIndex = 1, Memory = new byte[100], ReleaseMemoryCallback = _ => released = true };
+            var segment = new Segment(1, new byte[100], _ => released = true);
 
             PacketError? error = null;
             peer.OnDeserializeFailed += e => error = e;
@@ -239,7 +352,7 @@ namespace DunePresentation.Tests
             registry.RegisterHandler<BadDeserializePacket>(0x0099, null!, _ => _ => { });
             var peer = new global::DunePresentation.Peer.Peer(connection, registry);
 
-            var segment = new Segment { SegmentIndex = 1, Memory = new byte[100], ReleaseMemoryCallback = _ => { } };
+            var segment = new Segment(1, new byte[100], _ => { });
             var span = segment.Memory.Span;
             span[0] = 0x99; span[1] = 0x00; // packet ID 0x0099
 
@@ -270,7 +383,7 @@ namespace DunePresentation.Tests
 
             // Slice the segment memory to the actual packet size so DecryptAndDeserialize
             // reads only the relevant bytes (span.Length becomes PacketSize after decrypt).
-            segment.Memory = segment.Memory.Slice(0, packet.PacketSize);
+            segment = new Segment(segment.SegmentIndex, segment.Memory.Slice(0, packet.PacketSize), segment.ReleaseMemoryCallback);
 
             var result = peer.DecryptAndDeserialize(segment);
             Assert.NotNull(result);
@@ -312,7 +425,7 @@ namespace DunePresentation.Tests
 
             // Segment with only 1 byte (less than 2-byte header)
             bool released = false;
-            var segment = new Segment { SegmentIndex = 1, Memory = new byte[1], ReleaseMemoryCallback = _ => released = true };
+            var segment = new Segment(1, new byte[1], _ => released = true);
 
             PacketError? error = null;
             peer.OnDeserializeFailed += e => error = e;
@@ -852,12 +965,7 @@ namespace DunePresentation.Tests
             var peer = new global::DunePresentation.Peer.Peer(mockConn, registry, throwingEncryptor);
 
             bool released = false;
-            var segment = new Segment
-            {
-                SegmentIndex = 1,
-                Memory = new byte[10],
-                ReleaseMemoryCallback = _ => released = true
-            };
+            var segment = new Segment(1, new byte[10], _ => released = true);
 
             // ACT
             PacketError? error = null;
@@ -1044,7 +1152,7 @@ namespace DunePresentation.Tests
                         try
                         {
                             var wireData = new byte[] { 0x03, 0x00, (byte)'h', (byte)'i' };
-                            var segment = new Segment { SegmentIndex = 1, Memory = wireData, ReleaseMemoryCallback = _ => { } };
+                            var segment = new Segment(1, wireData, _ => { });
                             peer.DecryptAndDeserialize(segment);
                         }
                         catch { }
@@ -1163,6 +1271,34 @@ namespace DunePresentation.Tests
             }
 
             public bool ReadFieldsFromBuffer(ReadOnlySpan<byte> buffer, int length)
+            {
+                return false; // Always fails
+            }
+        }
+
+        /// <summary>
+        /// Packet whose ISegmentManager.OnSerialize returns false (simulating a serialize
+        /// failure after the segment was reserved). Used to exercise the SerializeFailed path
+        /// in ISegmentManager.Serialize (which returns SerializeResult.SerializeFailed).
+        /// </summary>
+        private class BadSerializePacket : IPacket
+        {
+            public ushort PacketId => 0x0098;
+            public int PacketSize { get; set; }
+            public Segment segment { get; set; }
+
+            public void WriteFieldsToBuffer(Span<byte> buffer, out int bytesWritten)
+            {
+                bytesWritten = 0;
+            }
+
+            public bool ReadFieldsFromBuffer(ReadOnlySpan<byte> buffer, int length)
+            {
+                return true;
+            }
+
+            // Override the explicit interface implementation to force a serialize failure.
+            bool ISegmentManager.OnSerialize()
             {
                 return false; // Always fails
             }

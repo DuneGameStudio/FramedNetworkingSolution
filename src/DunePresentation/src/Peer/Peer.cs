@@ -6,6 +6,8 @@ using DunePresentation.Packet.Interfaces;
 using DunePresentation.Peer.Interfaces;
 using DuneSession.SocketConnectors.Interface;
 using DuneTransport.BufferManager;
+using DuneTransport.BufferManager.Interface;
+
 
 namespace DunePresentation.Peer
 {
@@ -55,19 +57,40 @@ namespace DunePresentation.Peer
             ushort packetId = packet.PacketId;
             IPacketEncryptor? encryptor = _encryptor;
 
-            if (!packet.Serialize(_connection.Transport, (s, size) =>
+            // Phase 1: reserve + serialize. OnSerialize is contracted not to throw; the enum
+            // disambiguates pool-exhaustion from serialize-failure so we fire the correct error.
+            SerializeResult result = packet.Serialize(_connection.Transport);
+            if (result != SerializeResult.Ok)
             {
-                var span = s.Memory.Span;
-                PresentationHeader.Write(span, packetId);
-
-                if (encryptor != null)
-                    encryptor.Encrypt(span.Slice(0, size), span);
-            }))
-            {
-                OnSerializeFailed?.Invoke(PacketError.PoolExhausted);
+                PacketError err = result == SerializeResult.PoolExhausted
+                    ? PacketError.PoolExhausted
+                    : PacketError.SerializationError;
+                try { OnSerializeFailed?.Invoke(err); }
+                catch { }
                 return default;
             }
-            return packet.segment;
+
+            // Phase 2: write the presentation header + encrypt in place. This is presentation-layer
+            // work that previously lived inside ISegmentManager.Serialize via an injected callback;
+            // it now runs here, where a throw can be caught and the segment released (closing the
+            // SEG-1/SEG-2 leak path). Ownership of the segment is ours until we return it.
+            Segment seg = packet.segment;
+            Span<byte> span = seg.Memory.Span;
+            try
+            {
+                PresentationHeader.Write(span, packetId);
+                if (encryptor != null)
+                    encryptor.Encrypt(span.Slice(0, ((IPacket)packet).PacketSize), span);
+            }
+            catch (Exception)
+            {
+                seg.Release();
+                try { OnSerializeFailed?.Invoke(PacketError.SerializationError); }
+                catch { }
+                return default;
+            }
+
+            return seg;
         }
 
         /// <inheritdoc />
@@ -83,7 +106,8 @@ namespace DunePresentation.Peer
             catch
             {
                 segment.Release();
-                OnDeserializeFailed?.Invoke(PacketError.DecryptError);
+                try { OnDeserializeFailed?.Invoke(PacketError.DecryptError); }
+                catch { }
                 return null;
             }
 
@@ -96,7 +120,8 @@ namespace DunePresentation.Peer
             catch
             {
                 segment.Release();
-                OnDeserializeFailed?.Invoke(PacketError.SerializationError);
+                try { OnDeserializeFailed?.Invoke(PacketError.SerializationError); }
+                catch { }
                 return null;
             }
 
@@ -104,7 +129,8 @@ namespace DunePresentation.Peer
             if (!_packetRegistry.TryGetEntry(packetId, out Entry entry))
             {
                 segment.Release();
-                OnDeserializeFailed?.Invoke(PacketError.RegistryError);
+                try { OnDeserializeFailed?.Invoke(PacketError.RegistryError); }
+                catch { }
                 return null;
             }
 
@@ -113,12 +139,27 @@ namespace DunePresentation.Peer
             packet.segment = segment;
             packet.PacketSize = span.Length;
 
-            // packet.Deserialize() internally calls ISegmentManager.Deserialize() which
-            // ALWAYS releases the segment (regardless of success/failure).
-            // Do NOT call segment.Release() again here — that would be a double-release.
-            if (!packet.Deserialize())
+            // packet.Deserialize() internally calls ISegmentManager.Deserialize() which releases the
+            // segment on the success/failure return path. Per the ISegmentManager contract,
+            // OnDeserialize must not throw; but if an implementor violates that contract, the
+            // throw escapes Deserialize before the inner release runs — so guard it here and
+            // release the segment ourselves (closing the SEG-3 leak at the nearest site rather
+            // than relying on every outer caller being defensive).
+            try
             {
-                OnDeserializeFailed?.Invoke(PacketError.DeserializeError);
+                var deserializeResult = packet.Deserialize();
+                if (deserializeResult != DeserializeResult.Ok)
+                {
+                    try { OnDeserializeFailed?.Invoke(PacketError.DeserializeError); }
+                    catch { }
+                    return null;
+                }
+            }
+            catch (Exception)
+            {
+                segment.Release();
+                try { OnDeserializeFailed?.Invoke(PacketError.DeserializeError); }
+                catch { }
                 return null;
             }
 

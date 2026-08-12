@@ -49,9 +49,7 @@ namespace DunePresentation.Tests
             TryReserveSendCalled = true;
             if (ReserveSendResult)
             {
-                segment = new Segment();
-                segment.SegmentIndex = 1;
-                segment.Memory = new byte[DefaultSegmentSize];
+                segment = new Segment(1, new byte[DefaultSegmentSize], _ => { });
                 return true;
             }
             segment = default;

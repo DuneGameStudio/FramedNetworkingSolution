@@ -1,8 +1,8 @@
 using System;
-using System.Diagnostics;
 using System.Net.Sockets;
 using System.Threading;
 using DuneSession.SocketConnectors.Interface;
+
 using DuneTransport.Transport;
 using DuneTransport.Transport.Interface;
 
@@ -67,6 +67,8 @@ namespace DuneSession.SocketConnectors
             if (Volatile.Read(ref _disposed) == 1)
                 return;
 
+            // CR-9: Check connected state after disposed guard to avoid starting
+            // async disconnect on an already-disposed connection
             if (connectedState != 1)
                 return;
 
@@ -88,7 +90,11 @@ namespace DuneSession.SocketConnectors
                 return;
 
             socket.Close();
-            OnDisconnected?.Invoke();
+            try
+            {
+                OnDisconnected?.Invoke();
+            }
+            catch { }
         }
 
         /// <summary>
@@ -103,7 +109,11 @@ namespace DuneSession.SocketConnectors
                 return;
 
             socket.Close();
-            OnDisconnected?.Invoke();
+            try
+            {
+                OnDisconnected?.Invoke();
+            }
+            catch { }
         }
 
         /// <summary>
@@ -118,6 +128,11 @@ namespace DuneSession.SocketConnectors
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
+
+            // CR-9: Mark disconnected BEFORE unsubscribing, so any in-flight
+            // OnDisconnect or OnTransportReceiveFailed exits early via the
+            // connectedState guard instead of firing OnDisconnected on disposed resources.
+            Interlocked.Exchange(ref connectedState, 0);
 
             disconnectAsyncSocketAsyncEventArgs.Completed -= OnDisconnect;
             Transport.OnPacketReceiveFailed -= OnTransportReceiveFailed;

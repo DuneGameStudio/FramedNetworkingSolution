@@ -1,6 +1,5 @@
 using System;
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.Net.Sockets;
 using System.Threading;
 using DuneTransport.BufferManager;
@@ -113,7 +112,6 @@ namespace DuneTransport.Transport
         public Transport(Socket socket)
         {
             this.socket = socket ?? throw new ArgumentNullException(nameof(socket));
-
             sendBuffer = new SegmentedBuffer();
             receiveBuffer = new SegmentedBuffer();
 
@@ -187,15 +185,13 @@ namespace DuneTransport.Transport
                     }
                     catch (ObjectDisposedException)
                     {
-                        Debug.WriteLine("IssueReceive | ObjectDisposedException", "error");
                         currentReceivingSegment.Release();
                         Interlocked.Exchange(ref _receiveInFlight, 0);
                         OnPacketReceiveFailed?.Invoke(this, TransportError.SocketError);
                         return;
                     }
-                    catch (SocketException ex)
+                    catch (SocketException)
                     {
-                        Debug.WriteLine($"IssueReceive | SocketException: {ex.Message}", "error");
                         currentReceivingSegment.Release();
                         Interlocked.Exchange(ref _receiveInFlight, 0);
                         OnPacketReceiveFailed?.Invoke(this, TransportError.SocketError);
@@ -291,7 +287,6 @@ namespace DuneTransport.Transport
                 // Protocol violation: zero-length payload.
                 if (payloadLength == 0)
                 {
-                    Debug.WriteLine("ProcessReceive | Zero-length payload rejected.", "error");
                     Interlocked.Exchange(ref _receiveInFlight, 0);
                     OnPacketReceiveFailed?.Invoke(this, TransportError.ProtocolError);
                     return false;
@@ -300,7 +295,6 @@ namespace DuneTransport.Transport
                 // Protocol violation: payload larger than a segment.
                 if (payloadLength > receiveBuffer.SegmentSize)
                 {
-                    Debug.WriteLine($"ProcessReceive | Oversized payload ({payloadLength} > {receiveBuffer.SegmentSize}) rejected.", "error");
                     Interlocked.Exchange(ref _receiveInFlight, 0);
                     OnPacketReceiveFailed?.Invoke(this, TransportError.ProtocolError);
                     return false;
@@ -309,7 +303,6 @@ namespace DuneTransport.Transport
                 // Reserve payload segment.
                 if (!receiveBuffer.TryReserveSegment(out Segment payloadSegment))
                 {
-                    Debug.WriteLine("ProcessReceive | Failed to reserve payload segment.", "error");
                     Interlocked.Exchange(ref _receiveInFlight, 0);
                     OnPacketReceiveFailed?.Invoke(this, TransportError.PoolExhausted);
                     return false;
@@ -410,15 +403,13 @@ namespace DuneTransport.Transport
             }
             catch (ObjectDisposedException)
             {
-                Debug.WriteLine("SendAsync | ObjectDisposedException", "error");
                 var failed = currentSendingSegment;
                 currentSendingSegment = default;
                 Interlocked.Exchange(ref _sendInFlight, 0);
                 OnPacketSendFailed?.Invoke(this, failed, TransportError.SocketError);
             }
-            catch (SocketException ex)
+            catch (SocketException)
             {
-                Debug.WriteLine($"SendAsync | SocketException: {ex.Message}", "error");
                 var failed = currentSendingSegment;
                 currentSendingSegment = default;
                 Interlocked.Exchange(ref _sendInFlight, 0);
@@ -458,7 +449,10 @@ namespace DuneTransport.Transport
                 var seg = currentSendingSegment;
                 currentSendingSegment = default;
                 Interlocked.Exchange(ref _sendInFlight, 0);
-                OnPacketSendFailed?.Invoke(this, seg, TransportError.SocketError);
+                if (OnPacketSendFailed != null)
+                    OnPacketSendFailed(this, seg, TransportError.SocketError);
+                else
+                    seg.Release();
                 return;
             }
 

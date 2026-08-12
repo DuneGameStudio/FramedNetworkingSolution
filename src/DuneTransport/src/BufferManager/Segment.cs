@@ -17,14 +17,28 @@ namespace DuneTransport.BufferManager
     /// </remarks>
     public struct Segment
     {
+        /// <summary>
+        /// Creates a segment with the given index, memory, and release callback.
+        /// </summary>
+        /// <param name="segmentIndex">The 1-based index within the parent pool.</param>
+        /// <param name="memory">The writable memory slice.</param>
+        /// <param name="releaseMemoryCallback">Callback invoked on <see cref="Release"/>.</param>
+        public Segment(int segmentIndex, Memory<byte> memory, Action<int> releaseMemoryCallback)
+        {
+            SegmentIndex = segmentIndex;
+            Memory = memory;
+            ReleaseMemoryCallback = releaseMemoryCallback;
+        }
+
         /// <summary>The 1-based index of this segment within its parent <see cref="SegmentedBuffer"/>.</summary>
-        public int SegmentIndex { get; set; }
+        /// <remarks>Set by <see cref="SegmentedBuffer.TryReserveSegment"/> during reservation. Should not be mutated after reservation.</remarks>
+        public int SegmentIndex { get; internal set; }
 
         /// <summary>The writable memory slice assigned to this segment.</summary>
-        public Memory<byte> Memory { get; set; }
+        public Memory<byte> Memory { get; internal set; }
 
         /// <summary>Callback to release this segment back to its parent pool.</summary>
-        public Action<int> ReleaseMemoryCallback { get; set; }
+        public Action<int> ReleaseMemoryCallback { get; internal set; }
 
         /// <summary>
         /// Returns this segment to its parent <see cref="SegmentedBuffer"/> pool.

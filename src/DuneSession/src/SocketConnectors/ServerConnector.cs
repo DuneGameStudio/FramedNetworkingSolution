@@ -1,9 +1,9 @@
 using System;
-using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using DuneSession.SocketConnectors.Interface;
+
 
 namespace DuneSession.SocketConnectors
 {
@@ -60,7 +60,6 @@ namespace DuneSession.SocketConnectors
             if (Interlocked.Exchange(ref isListening, 1) != 0)
             {
                 isListening = 0;
-                Debug.WriteLine("StartListening | Server was already listening.", "Error");
                 return;
             }
 
@@ -77,7 +76,6 @@ namespace DuneSession.SocketConnectors
                 throw;
             }
 
-            Debug.WriteLine($"Server started listening on {address}:{port}", "log");
         }
 
         /// <inheritdoc />
@@ -89,12 +87,8 @@ namespace DuneSession.SocketConnectors
             try
             {
                 socket.Close();
-                Debug.WriteLine("Server stopped listening for new connections.", "log");
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"StopListening | Error during shutdown: {ex.Message}", "Error");
-            }
+            catch { }
         }
 
         /// <inheritdoc />
@@ -114,12 +108,10 @@ namespace DuneSession.SocketConnectors
             }
             catch (ObjectDisposedException)
             {
-                Debug.WriteLine("ObjectDisposedException");
                 OnAcceptFailed?.Invoke(SocketError.SocketError);
             }
             catch (SocketException ex)
             {
-                Debug.WriteLine($"AcceptConnection | SocketException: {ex.Message}", "Error");
                 OnAcceptFailed?.Invoke(ex.SocketErrorCode);
             }
         }
@@ -144,11 +136,23 @@ namespace DuneSession.SocketConnectors
             if (e.SocketError == SocketError.Success && e.AcceptSocket != null)
             {
                 IConnection connection = new Connection(e.AcceptSocket);
-                OnClientConnected?.Invoke(connection);
+                try
+                {
+                    OnClientConnected?.Invoke(connection);
+                }
+                catch
+                {
+                    // Subscriber failed to capture the connection — dispose to prevent socket leak
+                    connection.Dispose();
+                }
             }
             else
             {
-                OnAcceptFailed?.Invoke(e.SocketError);
+                try
+                {
+                    OnAcceptFailed?.Invoke(e.SocketError);
+                }
+                catch { }
             }
         }
 
@@ -159,6 +163,18 @@ namespace DuneSession.SocketConnectors
             StopListening();
             acceptEventArgs.Completed -= OnAcceptCompleted;
             acceptEventArgs.Dispose();
+
+            // Close the socket to prevent handle leaks if StartListening was never called
+            // or failed (isListening == 0, so StopListening didn't close it).
+            try
+            {
+                socket.Close();
+            }
+            catch
+            {
+                // Ignore — socket.Close() on an already-closed socket is a no-op,
+                // but can throw if the socket was never created (shouldn't happen).
+            }
         }
     }
 }

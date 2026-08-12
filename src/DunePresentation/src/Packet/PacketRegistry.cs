@@ -70,5 +70,15 @@ namespace DunePresentation.Packet
         {
             return _entries.TryGetValue(packetId, out entry);
         }
+
+        /// <summary>
+        /// Removes a previously registered handler for the specified packet ID.
+        /// </summary>
+        /// <param name="packetId">The packet ID to unregister.</param>
+        /// <returns><c>true</c> if the handler was found and removed; otherwise <c>false</c>.</returns>
+        public bool UnregisterHandler(ushort packetId)
+        {
+            return _entries.TryRemove(packetId, out _);
+        }
     }
 }

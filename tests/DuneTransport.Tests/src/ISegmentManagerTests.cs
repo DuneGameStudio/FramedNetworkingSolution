@@ -69,42 +69,35 @@ namespace DuneTransport.Tests
         }
 
         [Fact]
-        public void ISegmentManager_Serialize_Success_CallsOnSerializeAndCallback()
+        public void ISegmentManager_Serialize_Success_CallsOnSerializeAndReserves()
         {
             // ARRANGE
             var manager = new TestSegmentManager();
             var transport = new TestTransport();
-            Segment? callbackSegment = null;
-            int callbackSize = -1;
 
             // ACT - Cast to interface to access default methods
-            bool result = ((ISegmentManager)manager).Serialize(transport, (seg, size) =>
-            {
-                callbackSegment = seg;
-                callbackSize = size;
-            });
+            var result = ((ISegmentManager)manager).Serialize(transport);
 
             // ASSERT
-            Assert.True(result, "Serialize should return true on success");
+            Assert.Equal(SerializeResult.Ok, result);
             Assert.True(manager.OnSerializeCalled, "OnSerialize should be called");
-            Assert.NotNull(callbackSegment);
-            Assert.True(callbackSegment.Value.SegmentIndex > 0, "Segment should be reserved");
-            Assert.Equal(transport.LastReservedSegment?.SegmentIndex, callbackSegment?.SegmentIndex);
-            Assert.True(callbackSize >= 0, "Callback should receive size");
+            // The segment should be set to the reserved one, ready for the caller to post-process.
+            Assert.True(manager.segment.SegmentIndex > 0, "Segment should be reserved and assigned");
+            Assert.Equal(transport.LastReservedSegment?.SegmentIndex, manager.segment.SegmentIndex);
         }
 
         [Fact]
-        public void ISegmentManager_Serialize_OnSerializeFails_ReturnsFalseAndReleasesSegment()
+        public void ISegmentManager_Serialize_OnSerializeFails_ReturnsSerializeFailedAndReleasesSegment()
         {
             // ARRANGE
             var manager = new TestSegmentManager { OnSerializeResult = false };
             var transport = new TestTransport();
 
             // ACT
-            bool result = ((ISegmentManager)manager).Serialize(transport, (_, _) => { });
+            var result = ((ISegmentManager)manager).Serialize(transport);
 
             // ASSERT
-            Assert.False(result, "Serialize should return false when OnSerialize fails");
+            Assert.Equal(SerializeResult.SerializeFailed, result);
             Assert.True(manager.OnSerializeCalled, "OnSerialize should still be called");
             // Segment should be released back to pool (FreeCount back to 4)
             var buf = (SegmentedBuffer)typeof(TestTransport).GetField("_buffer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(transport)!;
@@ -112,7 +105,7 @@ namespace DuneTransport.Tests
         }
 
         [Fact]
-        public void ISegmentManager_Serialize_PoolExhausted_ReturnsFalse()
+        public void ISegmentManager_Serialize_PoolExhausted_ReturnsPoolExhausted()
         {
             // ARRANGE - Exhaust the pool
             var transport = new TestTransport();
@@ -122,25 +115,25 @@ namespace DuneTransport.Tests
             var manager = new TestSegmentManager();
 
             // ACT
-            bool result = ((ISegmentManager)manager).Serialize(transport, (_, _) => { });
+            var result = ((ISegmentManager)manager).Serialize(transport);
 
             // ASSERT
-            Assert.False(result, "Serialize should return false when pool exhausted");
+            Assert.Equal(SerializeResult.PoolExhausted, result);
             Assert.False(manager.OnSerializeCalled, "OnSerialize should not be called when no segment available");
         }
 
         [Fact]
-        public void ISegmentManager_Serialize_TransportDisposed_ReturnsFalse()
+        public void ISegmentManager_Serialize_TransportDisposed_ReturnsPoolExhausted()
         {
             // ARRANGE
             var manager = new TestSegmentManager();
             var transport = new DisposedTransport();
 
             // ACT
-            bool result = ((ISegmentManager)manager).Serialize(transport, (_, _) => { });
+            var result = ((ISegmentManager)manager).Serialize(transport);
 
             // ASSERT
-            Assert.False(result, "Serialize should return false for disposed transport");
+            Assert.Equal(SerializeResult.PoolExhausted, result);
         }
 
         [Fact]
@@ -149,7 +142,8 @@ namespace DuneTransport.Tests
             // ARRANGE
             var buffer = new SegmentedBuffer(1024, 4);
             buffer.TryReserveSegment(out var segment);
-            segment.Memory = segment.Memory.Slice(0, 10); // Simulate 10-byte packet
+            // Simulate 10-byte packet by creating a new segment with sliced memory
+            segment = new Segment(segment.SegmentIndex, segment.Memory.Slice(0, 10), segment.ReleaseMemoryCallback);
 
             var manager = new TestSegmentManager
             {
@@ -161,14 +155,14 @@ namespace DuneTransport.Tests
             int beforeCallbackSize = -1;
 
             // ACT
-            bool result = ((ISegmentManager)manager).Deserialize((seg, size) =>
+            var result = ((ISegmentManager)manager).Deserialize((seg, size) =>
             {
                 beforeCallbackSeg = seg;
                 beforeCallbackSize = size;
             });
 
             // ASSERT
-            Assert.True(result, "Deserialize should return true on success");
+            Assert.Equal(DeserializeResult.Ok, result);
             Assert.True(manager.OnDeserializeCalled, "OnDeserialize should be called");
             Assert.Equal(segment.SegmentIndex, beforeCallbackSeg?.SegmentIndex);
             Assert.Equal(10, beforeCallbackSize);
@@ -177,12 +171,12 @@ namespace DuneTransport.Tests
         }
 
         [Fact]
-        public void ISegmentManager_Deserialize_OnDeserializeFails_StillReleasesSegment()
+        public void ISegmentManager_Deserialize_OnDeserializeFails_ReturnsDeserializeFailedAndReleasesSegment()
         {
             // ARRANGE
             var buffer = new SegmentedBuffer(1024, 4);
             buffer.TryReserveSegment(out var segment);
-            segment.Memory = segment.Memory.Slice(0, 10);
+            segment = new Segment(segment.SegmentIndex, segment.Memory.Slice(0, 10), segment.ReleaseMemoryCallback);
 
             var manager = new TestSegmentManager
             {
@@ -192,10 +186,10 @@ namespace DuneTransport.Tests
             };
 
             // ACT
-            bool result = ((ISegmentManager)manager).Deserialize((_, _) => { });
+            var result = ((ISegmentManager)manager).Deserialize((_, _) => { });
 
             // ASSERT
-            Assert.False(result, "Deserialize should return false when OnDeserialize fails");
+            Assert.Equal(DeserializeResult.DeserializeFailed, result);
             Assert.True(manager.OnDeserializeCalled, "OnDeserialize should be called");
             // Segment MUST be released even on failure
             Assert.Equal(4, buffer.FreeCount);
@@ -207,7 +201,7 @@ namespace DuneTransport.Tests
             // ARRANGE
             var buffer = new SegmentedBuffer(1024, 4);
             buffer.TryReserveSegment(out var segment);
-            segment.Memory = segment.Memory.Slice(0, 42); // 42 bytes
+            segment = new Segment(segment.SegmentIndex, segment.Memory.Slice(0, 42), segment.ReleaseMemoryCallback);
 
             var manager = new TestSegmentManager
             {

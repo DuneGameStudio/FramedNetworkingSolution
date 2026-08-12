@@ -1,9 +1,9 @@
 using System;
-using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using DuneSession.SocketConnectors.Interface;
+
 
 namespace DuneSession.SocketConnectors
 {
@@ -19,7 +19,6 @@ namespace DuneSession.SocketConnectors
     public class ClientConnector : IClientConnector
     {
         private Socket? socket;
-        private readonly SocketAsyncEventArgs connectEventArgs;
         private volatile IConnection? connection;
         /// <summary>Connection attempt in-flight guard: 0 = idle, 1 = connecting.</summary>
         private volatile int connectingState;
@@ -36,26 +35,36 @@ namespace DuneSession.SocketConnectors
         /// Creates a new client connector.
         /// </summary>
         /// <remarks>
-        /// Allocates a <see cref="SocketAsyncEventArgs"/> for connection operations.
         /// Call <see cref="Dispose"/> when no longer needed.
         /// </remarks>
-        public ClientConnector()
-        {
-            connectEventArgs = new SocketAsyncEventArgs();
-            connectEventArgs.Completed += OnConnectCompleted;
-        }
+        public ClientConnector() { }
 
         /// <inheritdoc />
         public bool ConnectAsync(string address, int port)
         {
+            // Guard against calls after Dispose — prevents ObjectDisposedException
+            if (Volatile.Read(ref _disposed) == 1)
+                return false;
+
             if (IsConnected)
                 return false;
 
             if (Interlocked.Exchange(ref connectingState, 1) != 0)
                 return false;
 
+            // Create a fresh SocketAsyncEventArgs for each connection attempt.
+            // Reusing a single instance across overlapping async operations can cause
+            // callback collisions when the old operation's callback fires after a new
+            // operation has already been queued — both callbacks share the same object,
+            // and the first one to run zeroes connectingState, causing the other to exit
+            // silently and leave the client stuck in Connecting state.
+            var connectEventArgs = new SocketAsyncEventArgs();
+            connectEventArgs.Completed += OnConnectCompleted;
+
             try
             {
+                // Dispose any leftover socket from a previous failed connect attempt
+                socket?.Dispose();
                 socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
                 connectEventArgs.RemoteEndPoint = new IPEndPoint(IPAddress.Parse(address), port);
@@ -67,21 +76,27 @@ namespace DuneSession.SocketConnectors
             }
             catch (SocketException)
             {
+                connectEventArgs.Dispose();
                 socket?.Dispose();
+                socket = null;
                 Interlocked.Exchange(ref connectingState, 0);
                 OnConnectFailed?.Invoke(SocketError.SocketError);
                 return false;
             }
             catch (ObjectDisposedException)
             {
+                connectEventArgs.Dispose();
                 socket?.Dispose();
+                socket = null;
                 Interlocked.Exchange(ref connectingState, 0);
                 OnConnectFailed?.Invoke(SocketError.SocketError);
                 return false;
             }
             catch (FormatException)
             {
+                connectEventArgs.Dispose();
                 socket?.Dispose();
+                socket = null;
                 Interlocked.Exchange(ref connectingState, 0);
                 OnConnectFailed?.Invoke(SocketError.SocketError);
                 return false;
@@ -105,15 +120,32 @@ namespace DuneSession.SocketConnectors
             if (Interlocked.Exchange(ref connectingState, 0) != 1)
                 return;
 
+            // Dispose the per-attempt SocketAsyncEventArgs to release its pooled buffer
+            e.Dispose();
+
             if (e.SocketError == SocketError.Success)
             {
                 connection = new Connection(e.ConnectSocket);
-                OnConnected?.Invoke(connection);
+                socket = null; // Connection now owns the socket
+                try
+                {
+                    OnConnected?.Invoke(connection);
+                }
+                catch
+                {
+                    connection.Dispose();
+                    connection = null;
+                }
             }
             else
             {
                 socket?.Dispose();
-                OnConnectFailed?.Invoke(e.SocketError);
+                socket = null;
+                try
+                {
+                    OnConnectFailed?.Invoke(e.SocketError);
+                }
+                catch { }
             }
         }
 
@@ -121,9 +153,10 @@ namespace DuneSession.SocketConnectors
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
-            connectEventArgs.Completed -= OnConnectCompleted;
-            connectEventArgs.Dispose();
+            // Cancel any in-flight connect — connectingState guard in ProcessConnect
+            // will prevent the callback from processing if we clear the connection
             connection?.Dispose();
+            connection = null;
             socket?.Dispose();
             socket = null;
         }
